@@ -39,6 +39,11 @@ const CONFIG = {
   // Email the owner whenever something is flagged needs-review.
   NOTIFY_OWNER_ON_REVIEW: true,
 
+  // AI-drafted answers to guest questions not covered by Rules.js.
+  // Requires the ANTHROPIC_API_KEY script property. AI answers appear only
+  // in drafts (for your review) or in owner alerts — never auto-sent.
+  AI_ANSWERS_ENABLED: true,
+
   // Invoice numbering: AQL-<year>-<zero-padded counter>, e.g. AQL-2026-0001.
   INVOICE_PREFIX: 'AQL',
   INVOICE_PAD: 4,

@@ -131,17 +131,22 @@ function handleSubmission_(sub, message, reviewLabel) {
   }
 
   // Fully priced → invoice + confirmation email.
-  // In auto-send mode, a substantive free-text note from the guest forces a
-  // human look first (it may change the request); drafts are reviewed anyway.
-  if (!CONFIG.DRAFT_MODE && hasSubstantiveNote_(sub)) {
-    markReview_(message, reviewLabel, 'Guest added a note that needs a human read before auto-sending: "' + sub.questions + '"');
+  // If the guest asked a question, try to answer it: your rules first
+  // (Rules.js), then an AI draft (AI.js). In auto-send mode only
+  // rule-based answers may send; an AI-or-unanswered question forces a
+  // human look first (it may change the request). Drafts are reviewed anyway.
+  const qa = answerGuestQuestion_(sub, service);
+  if (!CONFIG.DRAFT_MODE && substantiveQuestion_(sub) && (!qa || qa.source !== 'rules')) {
+    markReview_(message, reviewLabel,
+      'Guest asked: "' + sub.questions + '"' +
+      (qa ? '\n\nAI-suggested reply (review before using):\n' + qa.text : '\n\nNo rule or AI answer available.'));
     appendLog_(Object.assign(base, { service: pricing.lineDescription, status: 'needs-review', notes: 'Guest note: ' + sub.questions }));
     return;
   }
 
   const invoiceNumber = nextInvoiceNumber_();
   const invoice = generateInvoice_(sub, service, variant, pricing, invoiceNumber);
-  const email = composeInvoiceEmail(sub, service, variant, pricing, invoiceNumber);
+  const email = composeInvoiceEmail(sub, service, variant, pricing, invoiceNumber, qa && qa.text);
   const mode = deliverGuestEmail_(sub.email, email, [invoice.pdf]);
 
   appendLog_(Object.assign(base, {
@@ -150,12 +155,14 @@ function handleSubmission_(sub, message, reviewLabel) {
     downpayment: pricing.downpayment,
     total: pricing.total,
     status: mode === 'draft' ? 'draft-created' : 'sent',
-    notes: sub.questions ? 'Guest note: ' + sub.questions : ''
+    notes: (sub.questions ? 'Guest note: ' + sub.questions : '') +
+           (qa ? ' | answered via ' + qa.source : '')
   }));
 }
 
 function sendClarification_(sub, service, missing, message, reviewLabel, base) {
-  const email = composeClarificationEmail(sub, service, missing);
+  const qa = CONFIG.DRAFT_MODE ? answerGuestQuestion_(sub, service) : null;
+  const email = composeClarificationEmail(sub, service, missing, qa && qa.text);
   const mode = deliverGuestEmail_(sub.email, email, null);
   markReview_(message, reviewLabel, 'Clarification requested from ' + (base.guestName || sub.email) + ': ' + missing.join('; '));
   appendLog_(Object.assign(base, {
@@ -173,16 +180,6 @@ function markReview_(message, reviewLabel, reason) {
   } catch (e) { /* labeling is best-effort */ }
   notifyOwner_('Needs review: ' + (message.getSubject() || '(no subject)'),
     reason + '\n\nOpen the original email (starred, label ' + CONFIG.REVIEW_LABEL + ') to act on it.');
-}
-
-/**
- * True when the guest's free-text note says more than where they're staying
- * (which guestLocation_ already consumes as the address).
- */
-function hasSubstantiveNote_(sub) {
-  if (!sub.questions) return false;
-  if ((sub.whereStaying || '').toLowerCase() === 'other' && sub.questions.length <= 80) return false;
-  return true;
 }
 
 function isContactForm_(formName) {

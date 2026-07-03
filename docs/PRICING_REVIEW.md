@@ -53,10 +53,11 @@ confirm.
 12. **Private Sailing** — "$2000 for 6 people, additional $50 p/p up to 15"
     is computed as base + $50 × (party − 6). A party of, say, 4 still pays
     the $2000 base (minimum), which matches the wording but confirm.
-13. **Catamaran / Pirates tours** — adult and child rates are firm; when a
-    form gives only a total headcount, the guest is asked for the
-    adult/child split (never assumed all adults, which would overcharge
-    families with kids).
+13. **Catamaran / Pirates tours** — adult and child rates are firm. Per
+    Josh's rule, a total-only headcount is priced with everyone at the
+    adult rate; the confirmation email says "N adults" so families with
+    kids can reply to correct it (they'd see a small refund, never a
+    surprise charge).
 
 ## Structural notes
 

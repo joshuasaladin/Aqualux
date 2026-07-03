@@ -37,13 +37,21 @@ function priceSubmission(service, variant, sub) {
       break;
 
     case 'adultChild': {
-      const b = sub.partyBreakdown || {};
+      // Josh's rule: when the form gives only a total headcount, price
+      // everyone at the adult rate rather than asking for the adult/child
+      // split. The confirmation email shows "N adults" so the guest can
+      // correct it if children are in the party.
+      const b = Object.assign({}, sub.partyBreakdown);
+      if (b.adults == null && b.children == null && sub.partySize != null) {
+        b.adults = sub.partySize;
+        b.children = 0;
+      }
       if (b.adults == null && b.children == null) {
-        missing.push('how many adults and how many children are in your party');
+        missing.push('how many people will be joining');
       } else {
         total = round2_(pricing.adult * (b.adults || 0) + pricing.child * (b.children || 0));
         peopleDisplay = partyDisplay_(b);
-        if (total === 0) missing.push('how many adults and how many children are in your party');
+        if (total === 0) missing.push('how many people will be joining');
       }
       break;
     }

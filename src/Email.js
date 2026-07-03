@@ -4,7 +4,7 @@
  */
 
 /** Invoice/confirmation email for a fully priced inquiry. */
-function composeInvoiceEmail(sub, service, variant, pricing, invoiceNumber) {
+function composeInvoiceEmail(sub, service, variant, pricing, invoiceNumber, answerText) {
   const first = sub.firstName || 'there';
   const dateLine = sub.date ? formatDateDisplay_(sub.date) : null;
 
@@ -28,6 +28,7 @@ money_(pricing.downpayment) + ' is required, with the remaining ' + money_(prici
 'Downpayment can be made via any of the following:\n' +
 CONFIG.PAYMENT_OPTIONS.map(p => '   •  ' + p).join('\n') + '\n\n' +
 'Cancellation policy: ' + CONFIG.CANCELLATION_POLICY + '\n\n' +
+(answerText ? 'You also asked: "' + sub.questions + '" — ' + answerText + '\n\n' : '') +
 'Your invoice (' + invoiceNumber + ') is attached for your records. If any detail above isn\'t quite right, ' +
 'simply reply to this email and we will take care of it.\n\n' +
 'We look forward to making your time in Aruba unforgettable.\n\n' +
@@ -44,7 +45,7 @@ CONFIG.WEBSITE;
 }
 
 /** Clarification email when required details are missing or ambiguous. */
-function composeClarificationEmail(sub, service, missing) {
+function composeClarificationEmail(sub, service, missing, answerText) {
   const first = sub.firstName || 'there';
   const svcName = service ? service.name : 'your experience';
 
@@ -53,6 +54,7 @@ function composeClarificationEmail(sub, service, missing) {
 'Thank you for your inquiry with Aqua Lux Aruba — we would love to arrange ' + svcName + ' for you.\n\n' +
 'To prepare your reservation and exact pricing, could you let us know:\n\n' +
 missing.map(m => '   •  ' + capitalize_(m)) .join('\n') + '\n\n' +
+(answerText ? 'To your question — ' + answerText + '\n\n' : '') +
 'As soon as we hear back, we will send over your confirmation and invoice right away.\n\n' +
 'Warm regards,\n' +
 'The Aqua Lux Aruba Team\n' +

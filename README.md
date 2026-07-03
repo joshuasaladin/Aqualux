@@ -134,6 +134,27 @@ src/
   Main.js          inbox processing + routing + trigger install
   Setup.js         one-time provisioning (labels, log, folder, template)
   Test.js          dryRunSample() / testSampleSubmission()
+  Rules.js         YOUR editable answer rules for common guest questions
+  AI.js            AI-drafted answers (Claude + web search) for the rest
 docs/
   PRICING_REVIEW.md  every pricing ambiguity found in the info sheet
 ```
+
+## Answering guest questions
+
+When a submission's "Any Questions?" field contains a real question:
+
+1. **Your rules first** (`src/Rules.js`) — keyword → your exact wording.
+   Rule answers are fully yours, so they're allowed to auto-send once
+   draft mode is off.
+2. **AI draft second** (`src/AI.js`) — Claude (claude-opus-4-8, with web
+   search) drafts a short answer under strict guardrails: no prices, no
+   availability promises, no vendor info, defer to Joshua when unsure, and
+   the leak guard checks the output. AI answers appear **only in drafts**
+   (or inside your needs-review alert as a suggested reply) — they are
+   never auto-sent, even after draft mode is off.
+3. **Neither available** — flagged for you, as before.
+
+To enable AI answers: in Apps Script, ⚙️ Project Settings → Script
+Properties → add `ANTHROPIC_API_KEY` with a key from
+console.anthropic.com. Without it the feature quietly stays off.
