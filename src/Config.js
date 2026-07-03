@@ -30,7 +30,7 @@ const CONFIG = {
   // Only messages matching this query are even considered; the parser then
   // additionally requires the Wix body signature and a Wix sender domain.
   GMAIL_QUERY: '"A site visitor just submitted your form" newer_than:7d',
-  WIX_SENDER_PATTERNS: ['wix.com', 'wixforms.com', 'wixanswers.com'],
+  WIX_SENDER_PATTERNS: ['wix.com', 'wix-forms.com', 'wixforms.com', 'wixanswers.com'],
 
   // Email the owner whenever something is flagged needs-review.
   NOTIFY_OWNER_ON_REVIEW: true,
