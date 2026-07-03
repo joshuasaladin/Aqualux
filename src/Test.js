@@ -109,3 +109,36 @@ function testSampleSubmission() {
     CONFIG.OWNER_EMAIL, invoiceNumber);
   Logger.log('Invoice sheet copy: https://docs.google.com/spreadsheets/d/' + invoice.fileId);
 }
+
+/**
+ * Diagnostic: shows every email the pipeline's search finds and exactly why
+ * each one is or isn't processed. Read-only — sends nothing, changes nothing.
+ * Run it, then read the Execution log.
+ */
+function debugInbox() {
+  const handledIds = processedMessageIds_();
+  const threads = GmailApp.search(CONFIG.GMAIL_QUERY);
+  Logger.log('Search query: %s', CONFIG.GMAIL_QUERY);
+  Logger.log('Threads found: %s', threads.length);
+
+  threads.forEach(thread => {
+    thread.getMessages().forEach(m => {
+      const from = (m.getFrom() || '');
+      const body = m.getPlainBody() || '';
+      const senderOk = CONFIG.WIX_SENDER_PATTERNS.some(p => from.toLowerCase().indexOf(p) !== -1);
+      const signatureOk = /a site visitor just submitted your form/i.test(body);
+      const done = !!handledIds[m.getId()];
+      let verdict;
+      if (done) verdict = 'SKIP — already processed (logged)';
+      else if (!senderOk) verdict = 'SKIP — sender is not Wix (add its domain to WIX_SENDER_PATTERNS in Config if this is a real Wix notification)';
+      else if (!signatureOk) verdict = 'SKIP — body is missing the "A site visitor just submitted your form" line';
+      else verdict = 'WILL PROCESS on next run';
+      Logger.log('• "%s" | from: %s | %s | %s', m.getSubject(), from,
+        Utilities.formatDate(m.getDate(), CONFIG.TIMEZONE, 'MM/dd HH:mm'), verdict);
+    });
+  });
+
+  const spam = GmailApp.search('in:spam "A site visitor just submitted your form"');
+  if (spam.length) Logger.log('⚠ %s matching thread(s) are in SPAM — the pipeline does not read spam. Mark them "Not spam".', spam.length);
+  Logger.log('Done. If a message says WILL PROCESS, run processInbox (or wait 5 min) and check Drafts + the log sheet.');
+}

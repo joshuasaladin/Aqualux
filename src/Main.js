@@ -9,24 +9,29 @@
  *                             labeled + notification email)
  *   (silently ignored)      — non-Wix mail that happened to match the query
  *
- * Every message ends up labeled Processed so it is never handled twice; the
- * log sheet's Message ID column is a second, label-independent safety net.
+ * Handled-once tracking is PER MESSAGE via the log sheet's Message ID
+ * column — Gmail threads Wix notifications for the same form under one
+ * subject, so a thread-level marker would silently skip every repeat
+ * submission of a form. The Processed label is applied to threads as a
+ * visual marker only; the search never filters on it.
  */
 function processInbox() {
   const processedLabel = getOrCreateLabel_(CONFIG.PROCESSED_LABEL);
   const reviewLabel = getOrCreateLabel_(CONFIG.REVIEW_LABEL);
+  const handledIds = processedMessageIds_();
 
-  const threads = GmailApp.search(CONFIG.GMAIL_QUERY + ' -label:' + labelQueryName_(CONFIG.PROCESSED_LABEL));
+  const threads = GmailApp.search(CONFIG.GMAIL_QUERY);
   for (const thread of threads) {
     for (const message of thread.getMessages()) {
       try {
-        if (alreadyProcessed_(message.getId())) continue;
+        if (handledIds[message.getId()]) continue;
         if (!isWixNotification(message)) continue; // spam / non-Wix: ignore silently
 
         const sub = parseWixNotification(message);
         if (!sub) continue;
 
         handleSubmission_(sub, message, reviewLabel);
+        handledIds[message.getId()] = true;
       } catch (err) {
         // Never let one bad email break the batch — flag it and move on.
         markReview_(message, reviewLabel, 'Pipeline error: ' + err.message);
@@ -35,6 +40,7 @@ function processInbox() {
           notes: 'ERROR: ' + err.message,
           messageId: message.getId()
         });
+        handledIds[message.getId()] = true;
       }
     }
     thread.addLabel(processedLabel);
@@ -173,11 +179,6 @@ function hasSubstantiveNote_(sub) {
 
 function getOrCreateLabel_(name) {
   return GmailApp.getUserLabelByName(name) || GmailApp.createLabel(name);
-}
-
-/** Gmail search syntax for nested labels: slashes become hyphens. */
-function labelQueryName_(name) {
-  return name.toLowerCase().replace(/[\/\s]+/g, '-');
 }
 
 /** Install the time-driven trigger (runs processInbox every 5 minutes). */

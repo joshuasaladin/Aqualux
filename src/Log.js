@@ -42,6 +42,13 @@ function alreadyProcessed_(messageId) {
   return logRows_().some(r => r[10] === messageId);
 }
 
+/** All logged Message IDs as a lookup map — read once per pipeline run. */
+function processedMessageIds_() {
+  const ids = {};
+  logRows_().forEach(r => { if (r[10]) ids[r[10]] = true; });
+  return ids;
+}
+
 /**
  * True if the same guest email + form/service + requested date was already
  * handled within the duplicate window — don't double-invoice.
