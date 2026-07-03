@@ -142,3 +142,38 @@ function debugInbox() {
   if (spam.length) Logger.log('⚠ %s matching thread(s) are in SPAM — the pipeline does not read spam. Mark them "Not spam".', spam.length);
   Logger.log('Done. If a message says WILL PROCESS, run processInbox (or wait 5 min) and check Drafts + the log sheet.');
 }
+
+/**
+ * Diagnostic: scan historical Wix notifications and list every distinct
+ * form name with its submission count and whether the catalog recognizes
+ * it. Read-only. May take a couple of minutes on a large inbox.
+ */
+function listFormNames() {
+  const counts = {};
+  let scanned = 0;
+  let start = 0;
+  const PAGE = 100;
+  while (true) {
+    const threads = GmailApp.search('"A site visitor just submitted your form"', start, PAGE);
+    if (!threads.length) break;
+    threads.forEach(thread => thread.getMessages().forEach(m => {
+      const body = m.getPlainBody() || '';
+      const match = body.match(/a site visitor just submitted your form\s+(.+?)\s+on\s+aqua\s?lux\s?aruba/i);
+      if (match) {
+        const name = collapseWhitespace_(match[1]);
+        counts[name] = (counts[name] || 0) + 1;
+        scanned++;
+      }
+    }));
+    start += PAGE;
+    if (start >= 1000) break; // safety cap: ~1000 threads is plenty
+  }
+
+  const names = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
+  Logger.log('Scanned %s submissions. Distinct form names:', scanned);
+  names.forEach(name => {
+    const svc = findServiceByFormName(name);
+    Logger.log('%s× "%s" → %s', counts[name], name, svc ? 'matches catalog: ' + svc.name : '❌ NOT RECOGNIZED');
+  });
+  Logger.log('Copy this whole list and send it to Claude to wire up the ❌ ones.');
+}
