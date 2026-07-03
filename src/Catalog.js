@@ -37,7 +37,9 @@ const CATALOG = [
   {
     id: 'pirates-sail',
     category: 'Water Activity',
-    formNames: ['Pirates Sail Boat', 'Pirate Sail', 'Pirates Sailing'],
+    // "Jolly Pirates" is this form's public name on the website; guest
+    // emails still use the neutral service name below.
+    formNames: ['Jolly Pirates', 'Pirates Sail Boat', 'Pirate Sail', 'Pirates Sailing'],
     name: 'Pirates Sail Boat Tour',
     description: 'Set sail aboard a legendary pirate ship for swimming, snorkeling over shipwrecks, rope swinging, and island vibes on the open Caribbean Sea.',
     commission: { type: 'pct', value: 0.15 },
@@ -83,7 +85,8 @@ const CATALOG = [
   {
     id: 'private-sailing',
     category: 'Water Activity',
-    formNames: ['Private Sailing'],
+    // "AWA Aruba" is this form's public name on the website.
+    formNames: ['AWA Aruba', 'Private Sailing'],
     name: 'Private Sailing Charter',
     description: 'A fully private luxury sail with your own chef on board, premium liquor, and underwater scooters — the ultimate day on the water.',
     commission: { type: 'pct', value: 0.10 },
@@ -111,7 +114,7 @@ const CATALOG = [
   {
     id: 'water-sports',
     category: 'Water Activity',
-    formNames: ['Water Sports', 'Watersports'],
+    formNames: ['Parasailing & Tubing', 'Water Sports', 'Watersports', 'Parasailing', 'Tubing', 'Jet Ski'],
     name: 'Water Sports',
     description: 'Pure adrenaline on the water — soar, splash, and speed along Aruba’s famous coastline.',
     variants: [
@@ -127,70 +130,52 @@ const CATALOG = [
 
   // ─────────────────────────── ADVENTURE ───────────────────────────
   {
-    id: 'utv-tour',
+    id: 'utv',
     category: 'Adventure',
-    formNames: ['UTV Tours', 'UTV Tour'],
-    name: 'UTV Guided Tour',
+    // One Wix form covers guided tours AND self-drive rentals; the tour/rental
+    // keyword in the guest's choice fields decides which price applies.
+    formNames: ['UTV Tours & Rentals', 'UTV Tours', 'UTV Tour', 'UTV Rental', 'UTV'],
+    name: 'UTV Adventure',
     description: 'Take the wheel of your own UTV and roar through Aruba’s rugged outback — hidden beaches, desert trails, and natural pools await.',
     partySizeIsVehicleCapacity: true,
     variants: [
-      { name: 'UTV Tour — 2-seater', match: [['2-seat', '2 seat', 'two seat']], timing: '9:00am – 1:00pm or 2:30pm – 6:30pm', seats: 2,
+      { name: 'UTV Guided Tour — 2-seater', match: [['tour'], ['2-seat', '2 seat', 'two seat']], timing: '9:00am – 1:00pm or 2:30pm – 6:30pm', seats: 2,
         pricing: { type: 'perVehicle', price: 190 }, commission: { type: 'flat', value: 20 } },
-      { name: 'UTV Tour — 3-seater', match: [['3-seat', '3 seat', 'three seat']], timing: '9:00am – 1:00pm or 2:30pm – 6:30pm', seats: 3,
+      { name: 'UTV Guided Tour — 3-seater', match: [['tour'], ['3-seat', '3 seat', 'three seat']], timing: '9:00am – 1:00pm or 2:30pm – 6:30pm', seats: 3,
         pricing: { type: 'perVehicle', price: 285 }, commission: { type: 'flat', value: 30 } },
-      { name: 'UTV Tour — 4-seater', match: [['4-seat', '4 seat', 'four seat']], timing: '9:00am – 1:00pm or 2:30pm – 6:30pm', seats: 4,
+      { name: 'UTV Guided Tour — 4-seater', match: [['tour'], ['4-seat', '4 seat', 'four seat']], timing: '9:00am – 1:00pm or 2:30pm – 6:30pm', seats: 4,
         pricing: { type: 'perVehicle', price: 380 }, commission: { type: 'flat', value: 40 } },
-      { name: 'UTV Tour — 5-seater', match: [['5-seat', '5 seat', 'five seat']], timing: '9:00am – 1:00pm or 2:30pm – 6:30pm', seats: 5,
-        pricing: { type: 'perVehicle', price: 475 }, commission: { type: 'flat', value: 40 } }
-    ]
-  },
-  {
-    id: 'utv-rental',
-    category: 'Adventure',
-    formNames: ['UTV Rental'],
-    name: 'UTV Rental',
-    description: 'Explore Aruba’s wild side at your own pace with a self-drive UTV rental.',
-    partySizeIsVehicleCapacity: true,
-    variants: [
-      { name: 'UTV Rental — 2-seater, 4 hours', match: [['2-seat', '2 seat', 'two seat'], ['4 hour', '4-hour', 'half']], seats: 2,
+      { name: 'UTV Guided Tour — 5-seater', match: [['tour'], ['5-seat', '5 seat', 'five seat']], timing: '9:00am – 1:00pm or 2:30pm – 6:30pm', seats: 5,
+        pricing: { type: 'perVehicle', price: 475 }, commission: { type: 'flat', value: 40 } },
+      { name: 'UTV Rental — 2-seater, 4 hours', match: [['rental', 'rent'], ['2-seat', '2 seat', 'two seat'], ['4 hour', '4-hour', 'half']], seats: 2,
         pricing: { type: 'perVehicle', price: 230 }, commission: { type: 'flat', value: 20 } },
-      { name: 'UTV Rental — 2-seater, 8 hours', match: [['2-seat', '2 seat', 'two seat'], ['8 hour', '8-hour', 'full']], seats: 2,
+      { name: 'UTV Rental — 2-seater, 8 hours', match: [['rental', 'rent'], ['2-seat', '2 seat', 'two seat'], ['8 hour', '8-hour', 'full']], seats: 2,
         pricing: { type: 'perVehicle', price: 270 }, commission: { type: 'flat', value: 20 } },
-      { name: 'UTV Rental — 3/4/5-seater, 4 hours', match: [['3-seat', '4-seat', '5-seat', '3 seat', '4 seat', '5 seat'], ['4 hour', '4-hour', 'half']], seats: 5,
+      { name: 'UTV Rental — 3/4/5-seater, 4 hours', match: [['rental', 'rent'], ['3-seat', '4-seat', '5-seat', '3 seat', '4 seat', '5 seat'], ['4 hour', '4-hour', 'half']], seats: 5,
         pricing: { type: 'perVehicle', price: 280 }, commission: { type: 'flat', value: 30 } },
-      { name: 'UTV Rental — 3/4/5-seater, 8 hours', match: [['3-seat', '4-seat', '5-seat', '3 seat', '4 seat', '5 seat'], ['8 hour', '8-hour', 'full']], seats: 5,
+      { name: 'UTV Rental — 3/4/5-seater, 8 hours', match: [['rental', 'rent'], ['3-seat', '4-seat', '5-seat', '3 seat', '4 seat', '5 seat'], ['8 hour', '8-hour', 'full']], seats: 5,
         pricing: { type: 'perVehicle', price: 340 }, commission: { type: 'flat', value: 30 } }
     ]
   },
   {
-    id: 'atv-tour',
+    id: 'atv',
     category: 'Adventure',
-    formNames: ['ATV Tour', 'ATV Tours'],
-    name: 'ATV Guided Tour',
-    description: 'Ride an ATV across Aruba’s desert landscape on a guided adventure to the island’s most dramatic natural landmarks.',
+    formNames: ['ATV Tour & Rentals', 'ATV Tours & Rentals', 'ATV Tour', 'ATV Tours', 'ATV Rental', 'ATV'],
+    name: 'ATV Adventure',
+    description: 'Ride an ATV across Aruba’s desert landscape — dramatic natural landmarks, rugged trails, and pure freedom on four wheels.',
     partySizeIsVehicleCapacity: true,
     variants: [
-      { name: 'ATV Tour — 1-seater', match: [['1-seat', '1 seat', 'one seat', 'single']], timing: '9:00am – 1:00pm or 2:30pm – 6:30pm', seats: 1,
+      { name: 'ATV Guided Tour — 1-seater', match: [['tour'], ['1-seat', '1 seat', 'one seat', 'single']], timing: '9:00am – 1:00pm or 2:30pm – 6:30pm', seats: 1,
         pricing: { type: 'perVehicle', price: 130 }, commission: { type: 'flat', value: 20 } },
-      { name: 'ATV Tour — 2-seater', match: [['2-seat', '2 seat', 'two seat', 'double']], timing: '9:00am – 1:00pm or 2:30pm – 6:30pm', seats: 2,
-        pricing: { type: 'perVehicle', price: 170 }, commission: { type: 'flat', value: 30 } }
-    ]
-  },
-  {
-    id: 'atv-rental',
-    category: 'Adventure',
-    formNames: ['ATV Rental'],
-    name: 'ATV Rental',
-    description: 'Freedom on four wheels — a self-drive ATV rental to discover Aruba’s rugged north coast on your own schedule.',
-    partySizeIsVehicleCapacity: true,
-    variants: [
-      { name: 'ATV Rental — 1-seater, 4 hours', match: [['1-seat', '1 seat', 'single'], ['4 hour', '4-hour', 'half']], seats: 1,
+      { name: 'ATV Guided Tour — 2-seater', match: [['tour'], ['2-seat', '2 seat', 'two seat', 'double']], timing: '9:00am – 1:00pm or 2:30pm – 6:30pm', seats: 2,
+        pricing: { type: 'perVehicle', price: 170 }, commission: { type: 'flat', value: 30 } },
+      { name: 'ATV Rental — 1-seater, 4 hours', match: [['rental', 'rent'], ['1-seat', '1 seat', 'single'], ['4 hour', '4-hour', 'half']], seats: 1,
         pricing: { type: 'perVehicle', price: 130 }, commission: { type: 'flat', value: 20 } },
-      { name: 'ATV Rental — 1-seater, 8 hours', match: [['1-seat', '1 seat', 'single'], ['8 hour', '8-hour', 'full']], seats: 1,
+      { name: 'ATV Rental — 1-seater, 8 hours', match: [['rental', 'rent'], ['1-seat', '1 seat', 'single'], ['8 hour', '8-hour', 'full']], seats: 1,
         pricing: { type: 'perVehicle', price: 160 }, commission: { type: 'flat', value: 20 } },
-      { name: 'ATV Rental — 2-seater, 4 hours', match: [['2-seat', '2 seat', 'double'], ['4 hour', '4-hour', 'half']], seats: 2,
+      { name: 'ATV Rental — 2-seater, 4 hours', match: [['rental', 'rent'], ['2-seat', '2 seat', 'double'], ['4 hour', '4-hour', 'half']], seats: 2,
         pricing: { type: 'perVehicle', price: 150 }, commission: { type: 'flat', value: 30 } },
-      { name: 'ATV Rental — 2-seater, 8 hours', match: [['2-seat', '2 seat', 'double'], ['8 hour', '8-hour', 'full']], seats: 2,
+      { name: 'ATV Rental — 2-seater, 8 hours', match: [['rental', 'rent'], ['2-seat', '2 seat', 'double'], ['8 hour', '8-hour', 'full']], seats: 2,
         pricing: { type: 'perVehicle', price: 180 }, commission: { type: 'flat', value: 30 } }
     ]
   },
@@ -303,7 +288,7 @@ const CATALOG = [
   {
     id: 'beach-picnic',
     category: 'Moments',
-    formNames: ['Beach Picnic'],
+    formNames: ['Beach Pic Nic', 'Beach Picnic', 'Pic Nic', 'Picnic'],
     name: 'Luxury Beach Picnic',
     description: 'A beautifully styled beachside picnic — an elegant setup, gourmet flavors, and the Caribbean as your backdrop.',
     commission: { type: 'flat', value: 15 },
@@ -402,14 +387,20 @@ function findServiceByFormName(formName) {
 }
 
 /**
- * Field labels that carry logistics rather than a service choice; their
- * values are excluded from variant matching (a party of "10" must not match
- * the "10-seater", menu "Option 1", etc.).
+ * Identity/logistics field labels — never used for variant matching.
  */
-const NON_CHOICE_FIELD_KEYS = [
+const IDENTITY_FIELD_KEYS = [
   'first name', 'last name', 'email', 'e-mail', 'date', 'time',
   'where are you staying', 'staying', 'resort', 'accommodation',
-  'questions', 'comments', 'special requests', 'phone',
+  'questions', 'comments', 'special requests', 'phone'
+];
+
+/**
+ * Count-type field labels — excluded from variant matching only when their
+ * value is a bare number, so a party of "10" can't match the "10-seater"
+ * but a duration choice of "8 hours" still can.
+ */
+const COUNT_FIELD_KEYS = [
   'people', 'guests', 'adults', 'children', 'kids', 'party', 'persons',
   'hours', 'duration'
 ];
@@ -423,7 +414,10 @@ function matchVariant(service, submission) {
   const haystack = Object.keys(submission.fields)
     .filter(label => {
       const l = label.toLowerCase();
-      return !NON_CHOICE_FIELD_KEYS.some(k => l.indexOf(k) !== -1);
+      if (IDENTITY_FIELD_KEYS.some(k => l.indexOf(k) !== -1)) return false;
+      if (COUNT_FIELD_KEYS.some(k => l.indexOf(k) !== -1)
+          && /^[\d\s.,-]*$/.test(submission.fields[label])) return false;
+      return true;
     })
     .map(k => submission.fields[k])
     .join(' \n ')

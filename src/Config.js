@@ -32,6 +32,10 @@ const CONFIG = {
   GMAIL_QUERY: '"A site visitor just submitted your form" newer_than:7d',
   WIX_SENDER_PATTERNS: ['wix.com', 'wix-forms.com', 'wixforms.com', 'wixanswers.com'],
 
+  // Forms that are general contact/messages, not service bookings: no
+  // automatic guest reply — just flag for the owner to answer personally.
+  CONTACT_FORMS: ['Contact', 'Contact Form'],
+
   // Email the owner whenever something is flagged needs-review.
   NOTIFY_OWNER_ON_REVIEW: true,
 

@@ -64,6 +64,14 @@ function handleSubmission_(sub, message, reviewLabel) {
     return;
   }
 
+  // General contact-form messages get no automated reply — content is
+  // unpredictable (questions, vendors, spam), so the owner answers those.
+  if (isContactForm_(sub.formName)) {
+    markReview_(message, reviewLabel, 'Contact form message from ' + (base.guestName || sub.email) + '.');
+    appendLog_(Object.assign(base, { service: sub.formName, status: 'needs-review', notes: 'Contact form — answer personally' }));
+    return;
+  }
+
   // Duplicate guard — never double-invoice.
   if (isDuplicateSubmission_(sub)) {
     markReview_(message, reviewLabel, 'Duplicate submission from ' + sub.email + ' for ' + sub.formName + '.');
@@ -175,6 +183,11 @@ function hasSubstantiveNote_(sub) {
   if (!sub.questions) return false;
   if ((sub.whereStaying || '').toLowerCase() === 'other' && sub.questions.length <= 80) return false;
   return true;
+}
+
+function isContactForm_(formName) {
+  const f = String(formName || '').toLowerCase();
+  return CONFIG.CONTACT_FORMS.some(c => f === c.toLowerCase()) || f.indexOf('contact') !== -1;
 }
 
 function getOrCreateLabel_(name) {
