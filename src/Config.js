@@ -36,6 +36,11 @@ const CONFIG = {
   // automatic guest reply — just flag for the owner to answer personally.
   CONTACT_FORMS: ['Contact', 'Contact Form'],
 
+  // Drive file ID of the Private Chef menu PDF. When set, chef confirmation
+  // emails attach the menu and mention it. Can also be set as a Script
+  // Property named CHEF_MENU_FILE_ID.
+  CHEF_MENU_FILE_ID: '',
+
   // Email the owner whenever something is flagged needs-review.
   NOTIFY_OWNER_ON_REVIEW: true,
 

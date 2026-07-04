@@ -4,7 +4,7 @@
  */
 
 /** Invoice/confirmation email for a fully priced inquiry. */
-function composeInvoiceEmail(sub, service, variant, pricing, invoiceNumber, answerText) {
+function composeInvoiceEmail(sub, service, variant, pricing, invoiceNumber, answerText, extraLine) {
   const first = sub.firstName || 'there';
   const dateLine = sub.date ? formatDateDisplay_(sub.date) : null;
 
@@ -21,7 +21,7 @@ function composeInvoiceEmail(sub, service, variant, pricing, invoiceNumber, answ
 'Thank you for your inquiry with Aqua Lux Aruba — it would be our pleasure to arrange this for you.\n\n' +
 'Here is what we have reserved pending your confirmation:\n\n' +
 details.map(d => '   •  ' + d).join('\n') + '\n\n' +
-service.description + '\n\n' +
+service.description + (extraLine ? '\n\n' + extraLine : '') + '\n\n' +
 'Your total for this experience is ' + money_(pricing.total) + '. To secure your reservation, a downpayment of ' +
 money_(pricing.downpayment) + ' is required, with the remaining ' + money_(pricing.remaining) +
 ' due on the day of your experience.\n\n' +
@@ -66,21 +66,54 @@ CONFIG.WEBSITE;
   return { subject: subject, body: body };
 }
 
-/** Warm holding reply for requests we can't price from the catalog. */
-function composeFollowUpEmail(sub, serviceName) {
+/**
+ * Warm holding reply for requests we can't price from the catalog.
+ * When the service defines a quoteRequest (e.g. "send inspiration
+ * pictures"), that ask replaces the generic follow-up promise.
+ */
+function composeFollowUpEmail(sub, serviceName, quoteRequest) {
   const first = sub.firstName || 'there';
   const what = serviceName || 'the experience you have in mind';
 
   const body =
 'Dear ' + first + ',\n\n' +
 'Thank you for reaching out to Aqua Lux Aruba — we would love to arrange ' + what + ' for you.\n\n' +
-'To make sure every detail is exactly right, Joshua will follow up with you personally with the ' +
-'options and pricing, usually within the day.\n\n' +
+(quoteRequest
+  ? quoteRequest + '\n\n'
+  : 'To make sure every detail is exactly right, Joshua will follow up with you personally with the ' +
+    'options and pricing, usually within the day.\n\n') +
 'Warm regards,\n' +
 'The Aqua Lux Aruba Team\n' +
 CONFIG.WEBSITE;
 
   const subject = 'Your Aqua Lux Aruba Inquiry — we\'re on it';
+  assertGuestSafe_(subject, 'email subject');
+  assertGuestSafe_(body, 'email body');
+  return { subject: subject, body: body };
+}
+
+/**
+ * Price-quote email with booking questions and no invoice (car rentals):
+ * states the price, explains payment at pickup, and lists what we need
+ * from the guest to confirm the booking.
+ */
+function composeInquiryEmail(sub, service, variant, answerText) {
+  const first = sub.firstName || 'there';
+
+  const body =
+'Dear ' + first + ',\n\n' +
+'Thank you for your inquiry with Aqua Lux Aruba — great choice!\n\n' +
+variant.pricing.priceText + '\n\n' +
+(service.inquiryNote ? service.inquiryNote + '\n\n' : '') +
+'To confirm your booking, could you reply with:\n\n' +
+(service.inquiryQuestions || []).map(q => '   •  ' + capitalize_(q)).join('\n') + '\n\n' +
+(answerText ? 'To your question — ' + answerText + '\n\n' : '') +
+'As soon as we have everything, Joshua will confirm your booking personally.\n\n' +
+'Warm regards,\n' +
+'The Aqua Lux Aruba Team\n' +
+CONFIG.WEBSITE;
+
+  const subject = 'Your Aqua Lux Aruba ' + service.name + ' Inquiry — ' + variant.name;
   assertGuestSafe_(subject, 'email subject');
   assertGuestSafe_(body, 'email body');
   return { subject: subject, body: body };

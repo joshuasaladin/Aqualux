@@ -14,6 +14,11 @@ function priceSubmission(service, variant, sub) {
   if (pricing.type === 'quote') {
     return { status: 'review', reason: 'No price on file — personal follow-up promised to guest.' };
   }
+  if (pricing.type === 'inquire') {
+    // Quoted by email with booking questions (e.g. car rental) — no invoice;
+    // Josh confirms the booking personally.
+    return { status: 'inquire' };
+  }
   if (pricing.type === 'review') {
     return { status: 'review', reason: pricing.reason };
   }
@@ -31,6 +36,8 @@ function priceSubmission(service, variant, sub) {
     case 'perPerson':
       if (sub.partySize == null) {
         missing.push('how many people will be joining');
+      } else if (pricing.minPeople && sub.partySize < pricing.minPeople) {
+        return { status: 'review', reason: 'Party of ' + sub.partySize + ' is below the minimum of ' + pricing.minPeople + ' for this option.' };
       } else {
         total = round2_(pricing.price * sub.partySize);
       }
@@ -62,9 +69,8 @@ function priceSubmission(service, variant, sub) {
       } else if (sub.hours < pricing.minHours || sub.hours > pricing.maxHours) {
         missing.push('a duration between ' + pricing.minHours + ' and ' + pricing.maxHours + ' hours');
       } else if (pricing.over4Rate && sub.hours > 4) {
-        // Two-rate structure ($X/h up to 4h, $Y/h beyond) — the sheet doesn't
-        // say whether the lower rate applies to all hours or only extra ones.
-        return { status: 'review', reason: 'Requested ' + sub.hours + ' hours; the >4-hour rate structure is ambiguous in the info sheet.' };
+        // Per Josh: the lower rate applies only to hours beyond the 4th.
+        total = round2_(pricing.rate * 4 + pricing.over4Rate * (sub.hours - 4));
       } else {
         total = round2_(pricing.rate * sub.hours);
       }
@@ -103,8 +109,8 @@ function priceSubmission(service, variant, sub) {
   // Vehicle-capacity sanity check: don't invoice a 2-seater for a party of 6.
   if (total != null && service.partySizeIsVehicleCapacity && variant.seats && sub.partySize != null
       && sub.partySize > variant.seats) {
-    missing.push('a vehicle choice that fits your party of ' + sub.partySize +
-      ' (the ' + variant.name + ' seats ' + variant.seats + ') — or let us know how many vehicles you need');
+    missing.push('a choice that fits your party of ' + sub.partySize +
+      ' (the ' + variant.name + ' seats ' + variant.seats + ') — or let us know how many you would like');
     total = null;
   }
 

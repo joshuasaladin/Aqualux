@@ -1,35 +1,31 @@
 /**
  * Aqua Lux Aruba service catalog — GUEST-SAFE data only.
+ * Rebuilt from Josh's reorganized Concierge Info Sheet (v3.1).
  *
- * Deliberately contains NO vendor names, phone numbers, emails or booking
- * methods. Commission figures appear only as numbers because, per Josh's
- * rule, the downpayment collected from the guest equals Aqua Lux's
- * commission; they are never rendered into guest-facing text (the outbound
- * leak guard in Guard.js enforces this).
+ * Deliberately contains NO vendor contacts or booking methods. Commission
+ * figures appear only as numbers because the downpayment collected from the
+ * guest equals Aqua Lux's commission; they are never rendered into
+ * guest-facing text (the outbound leak guard in Guard.js enforces this).
+ * Vendor-derived form names (Jolly Pirates, AWA Aruba) are the PUBLIC names
+ * of the Wix forms on the website, used for matching only.
  *
  * Pricing types:
  *   flat              — one price per setup/booking            {price}
- *   perPerson         — price × party size                     {price}
+ *   perPerson         — price × party size                     {price, minPeople?}
  *   perVehicle        — one price per vehicle/unit             {price}
  *   adultChild        — adult price × adults + child × kids    {adult, child}
- *   perHour           — rate × hours                           {rate, minHours, maxHours}
+ *   perHour           — rate × hours; over4Rate applies to     {rate, minHours, maxHours, over4Rate?}
+ *                       hours beyond the 4th (per Josh)
  *   tieredPerPerson   — per-person price depends on group size {tiers:[{min,max,price}]}
  *   groupFormula      — base for N + extra per person          {base, included, extraPerPerson, maxPeople}
- *   quote             — no reliable price on file; never auto-invoice, warm
- *                       "we'd love to arrange this" reply + owner review
- *   review            — catalog ambiguity (see reason); never auto-invoice,
- *                       flag for owner
+ *   inquire           — email quote + booking questions, no    {priceText}
+ *                       invoice (car rental); Josh confirms
+ *   quote             — no price on file; warm follow-up reply
+ *                       (optionally asking service.quoteRequest) + owner review
+ *   review            — unresolved ambiguity; never auto-invoice
  *
  * Commission types (= guest downpayment):
- *   pct               — value × guest total (value is 0–1)
- *   flat              — fixed dollar amount per booking
- *   flatPerPerson     — fixed dollars × party size
- *   pctPlusPerPerson  — pct × total + perPerson × party size
- *   unknown           — cannot compute downpayment → needs-review
- *
- * Variant matching: each variant lists `match`, an array of keyword groups.
- * A variant matches when EVERY group has at least one keyword found in the
- * submission's choice fields (AND of ORs, case-insensitive).
+ *   pct | flat | flatPerPerson | pctPlusPerPerson | unknown
  */
 const CATALOG = [
 
@@ -37,11 +33,9 @@ const CATALOG = [
   {
     id: 'pirates-sail',
     category: 'Water Activity',
-    // "Jolly Pirates" is this form's public name on the website; guest
-    // emails still use the neutral service name below.
     formNames: ['Jolly Pirates', 'Pirates Sail Boat', 'Pirate Sail', 'Pirates Sailing'],
     name: 'Pirates Sail Boat Tour',
-    description: 'Set sail aboard a legendary pirate ship for swimming, snorkeling over shipwrecks, rope swinging, and island vibes on the open Caribbean Sea.',
+    description: 'Set sail aboard a legendary pirate ship — swim, snorkel, and rope-swing your way along Aruba’s coast.',
     commission: { type: 'pct', value: 0.15 },
     variants: [
       { name: 'Morning Tour', match: [['morning']], timing: '9:00am – 1:00pm',
@@ -57,7 +51,7 @@ const CATALOG = [
     category: 'Water Activity',
     formNames: ['Catamaran Tour', 'Catamaran'],
     name: 'Catamaran Tour',
-    description: 'Glide along Aruba’s coastline on a spacious catamaran with snorkel stops in crystal-clear water, an open bar, and endless ocean views.',
+    description: 'Glide along Aruba’s coastline on a spacious catamaran with snorkel stops in crystal-clear water and endless ocean views.',
     commission: { type: 'pct', value: 0.15 },
     variants: [
       { name: 'Brunch Tour', match: [['brunch']], timing: '9:00am – 1:00pm',
@@ -76,16 +70,15 @@ const CATALOG = [
     description: 'Your own private boat and captain — cruise, swim, and snorkel on your schedule with the island’s best spots all to yourselves.',
     commission: { type: 'pct', value: 0.15 },
     variants: [
-      { name: '10-seater Private Boat', match: [['10']], timing: '3–8 hours (latest finish 7pm)',
+      { name: '10-seater Private Boat', match: [['10']], seats: 10, timing: '3–8 hours (latest finish 7pm)',
         pricing: { type: 'perHour', rate: 200, minHours: 3, maxHours: 8 } },
-      { name: '15-seater Private Boat', match: [['15']], timing: '3–8 hours (latest finish 7pm)',
+      { name: '15-seater Private Boat', match: [['15']], seats: 15, timing: '3–8 hours (latest finish 7pm)',
         pricing: { type: 'perHour', rate: 300, minHours: 3, maxHours: 8 } }
     ]
   },
   {
     id: 'private-sailing',
     category: 'Water Activity',
-    // "AWA Aruba" is this form's public name on the website.
     formNames: ['AWA Aruba', 'Private Sailing'],
     name: 'Private Sailing Charter',
     description: 'A fully private luxury sail with your own chef on board, premium liquor, and underwater scooters — the ultimate day on the water.',
@@ -104,7 +97,7 @@ const CATALOG = [
     category: 'Water Activity',
     formNames: ['Clear Kayak', 'Clear Kayak Drone Shoot'],
     name: 'Clear Kayak Drone Shoot',
-    description: 'Paddle a crystal-clear kayak over turquoise water while a professional drone captures breathtaking aerial photos and video of your experience.',
+    description: 'Paddle a crystal-clear kayak over turquoise water while a professional drone captures breathtaking photos and video of your experience.',
     commission: { type: 'pct', value: 0.40 },
     variants: [
       { name: 'Clear Kayak Drone Shoot', match: [], timing: '1 hour',
@@ -117,14 +110,15 @@ const CATALOG = [
     formNames: ['Parasailing & Tubing', 'Water Sports', 'Watersports', 'Parasailing', 'Tubing', 'Jet Ski'],
     name: 'Water Sports',
     description: 'Pure adrenaline on the water — soar, splash, and speed along Aruba’s famous coastline.',
+    partySizeIsVehicleCapacity: true,
     variants: [
-      // Flagged in docs/PRICING_REVIEW.md: assumed per person — confirm.
-      { name: 'Parasailing', match: [['parasail']], timing: '10–12 minutes in the air',
+      { name: 'Parasailing', match: [['parasail']], timing: '10–12 minutes in the air; goes out hourly from 10am',
         pricing: { type: 'perPerson', price: 70 }, commission: { type: 'flatPerPerson', value: 20 } },
       { name: 'Tubing', match: [['tubing', 'tube']], timing: '15–20 minutes',
         pricing: { type: 'perPerson', price: 25 }, commission: { type: 'flatPerPerson', value: 5 } },
-      { name: 'Jet Ski', match: [['jet']], timing: '30 minutes',
-        pricing: { type: 'perPerson', price: 85 }, commission: { type: 'flatPerPerson', value: 15 } }
+      // Per Josh: $85 is per jet ski (seats 2), not per rider.
+      { name: 'Jet Ski', match: [['jet']], seats: 2, timing: '30 minutes; every half hour from 10:30',
+        pricing: { type: 'perVehicle', price: 85 }, commission: { type: 'flat', value: 15 } }
     ]
   },
 
@@ -132,8 +126,6 @@ const CATALOG = [
   {
     id: 'utv',
     category: 'Adventure',
-    // One Wix form covers guided tours AND self-drive rentals; the tour/rental
-    // keyword in the guest's choice fields decides which price applies.
     formNames: ['UTV Tours & Rentals', 'UTV Tours', 'UTV Tour', 'UTV Rental', 'UTV'],
     name: 'UTV Adventure',
     description: 'Take the wheel of your own UTV and roar through Aruba’s rugged outback — hidden beaches, desert trails, and natural pools await.',
@@ -185,11 +177,10 @@ const CATALOG = [
     formNames: ['Private Jeep Tour', 'Jeep Tour'],
     name: 'Private Jeep Tour',
     description: 'A private open-air jeep adventure to Aruba’s natural pool, caves, and coastline with a guide all to yourselves.',
-    // Info sheet: $100 p/p, commission "20" — unclear if that 20 is per
-    // person or per booking, so the downpayment cannot be computed safely.
+    // Per Josh: the $20 downpayment is per person.
     variants: [
       { name: 'Private Jeep Tour', match: [], timing: '9:00am – 1:00pm',
-        pricing: { type: 'perPerson', price: 100 }, commission: { type: 'unknown' } }
+        pricing: { type: 'perPerson', price: 100 }, commission: { type: 'flatPerPerson', value: 20 } }
     ]
   },
   {
@@ -198,12 +189,13 @@ const CATALOG = [
     formNames: ['Open-Air Safari', 'Open Air Safari', 'Safari'],
     name: 'Open-Air Safari',
     description: 'A customizable open-air safari — build your own island route and explore Aruba’s highlights in comfort with your group.',
-    // Info sheet lists no commission for this service → downpayment unknown.
+    // Per Josh: lower rate applies to hours beyond the 4th; downpayment $40 flat.
+    commission: { type: 'flat', value: 40 },
     variants: [
-      { name: 'Open-Air Safari — 6-seater', match: [['6']], timing: 'Min 3 hours, max 8 hours (6am–6pm)', seats: 6,
-        pricing: { type: 'perHour', rate: 110, minHours: 3, maxHours: 8, over4Rate: 60 }, commission: { type: 'unknown' } },
-      { name: 'Open-Air Safari — 9-seater', match: [['9']], timing: 'Min 3 hours, max 8 hours (6am–6pm)', seats: 9,
-        pricing: { type: 'perHour', rate: 130, minHours: 3, maxHours: 8, over4Rate: 70 }, commission: { type: 'unknown' } }
+      { name: 'Open-Air Safari — 6-seater', match: [['6']], seats: 6, timing: 'Min 3 – max 8 hours, between 6am – 6pm',
+        pricing: { type: 'perHour', rate: 110, minHours: 3, maxHours: 8, over4Rate: 60 } },
+      { name: 'Open-Air Safari — 9-seater', match: [['9']], seats: 9, timing: 'Min 3 – max 8 hours, between 6am – 6pm',
+        pricing: { type: 'perHour', rate: 130, minHours: 3, maxHours: 8, over4Rate: 70 } }
     ]
   },
 
@@ -215,16 +207,16 @@ const CATALOG = [
     name: 'Private In-Villa Massage',
     description: 'Resort-quality massage therapy brought directly to you — unwind with a private session at your villa, condo, or beachside.',
     commission: { type: 'pct', value: 0.30 },
-    // Flagged in docs/PRICING_REVIEW.md: prices assumed per person — confirm.
     variants: [
       { name: 'Swedish Massage — 60 minutes', match: [['swedish'], ['60', 'hour']],
         pricing: { type: 'perPerson', price: 120 } },
       { name: 'Swedish Massage — 90 minutes', match: [['swedish'], ['90']],
         pricing: { type: 'perPerson', price: 170 } },
-      // Info sheet lists two different 60-minute prices for Hot Stone
-      // ($135 and $165) — never auto-price until resolved.
-      { name: 'Hot Stone Massage', match: [['hot stone', 'hotstone']],
-        pricing: { type: 'review', reason: 'Info sheet lists two conflicting 60-minute prices for Hot Stone ($135 and $165).' } },
+      { name: 'Hot Stone Massage — 60 minutes', match: [['hot stone', 'hotstone'], ['60', 'hour']],
+        pricing: { type: 'perPerson', price: 135 } },
+      // Per Josh: $165 is the 90-minute Hot Stone.
+      { name: 'Hot Stone Massage — 90 minutes', match: [['hot stone', 'hotstone'], ['90']],
+        pricing: { type: 'perPerson', price: 165 } },
       { name: 'Deep Tissue Massage — 60 minutes', match: [['deep'], ['60', 'hour']],
         pricing: { type: 'perPerson', price: 135 } },
       { name: 'Deep Tissue Massage — 90 minutes', match: [['deep'], ['90']],
@@ -235,80 +227,61 @@ const CATALOG = [
   },
 
   // ───────────────────────── PRIVATE CUISINE ─────────────────────────
+  // One Wix form ("Private Chef") covers both chefs; the guest's menu
+  // choice decides the variant. attachMenu: the confirmation email attaches
+  // the menu PDF when CHEF_MENU_FILE_ID is configured.
   {
-    id: 'chef-buffet',
+    id: 'private-cuisine',
     category: 'Private Cuisine',
-    formNames: ['Private Chef Buffet', 'Private Chef', 'Chef Buffet'],
+    formNames: ['Private Chef', 'Private Chef Buffet', 'Chef Buffet', 'Private Cookout', 'Paella', 'Cookout'],
     name: 'Private Chef Experience',
-    description: 'A private chef arrives at your villa an hour ahead and creates a restaurant-worthy dining experience just for your party.',
-    commission: { type: 'pctPlusPerPerson', pct: 0.10, perPerson: 5 },
+    description: 'A private chef arrives ahead of time and creates a restaurant-worthy dining experience just for your party, right where you’re staying.',
+    attachMenu: true,
     variants: [
       { name: 'Private Chef — Breakfast', match: [['breakfast']],
+        commission: { type: 'pctPlusPerPerson', pct: 0.10, perPerson: 5 },
         pricing: { type: 'tieredPerPerson', tiers: [
-          { min: 2, max: 3, price: 65 }, { min: 4, max: 8, price: 50 }, { min: 9, max: 99, price: 45 }] } },
+          { min: 2, max: 3, price: 65 }, { min: 4, max: 8, price: 50 }, { min: 9, max: 999, price: 45 }] } },
       { name: 'Private Chef — Brunch', match: [['brunch']],
+        commission: { type: 'pctPlusPerPerson', pct: 0.10, perPerson: 5 },
         pricing: { type: 'tieredPerPerson', tiers: [
-          { min: 2, max: 3, price: 85 }, { min: 4, max: 8, price: 70 }, { min: 9, max: 99, price: 65 }] } },
+          { min: 2, max: 3, price: 85 }, { min: 4, max: 8, price: 70 }, { min: 9, max: 999, price: 65 }] } },
       { name: 'Private Chef — 3-Course / Caribbean Menu', match: [['3 course', '3-course', 'three course', 'caribbean']],
+        commission: { type: 'pctPlusPerPerson', pct: 0.10, perPerson: 5 },
         pricing: { type: 'tieredPerPerson', tiers: [
           { min: 1, max: 2, price: 140 }, { min: 3, max: 4, price: 120 }, { min: 5, max: 7, price: 110 },
-          { min: 8, max: 10, price: 100 }, { min: 11, max: 99, price: 90 }] } },
+          { min: 8, max: 10, price: 100 }, { min: 11, max: 999, price: 90 }] } },
       { name: 'Private Chef — Local Menu', match: [['local']],
-        pricing: { type: 'tieredPerPerson', tiers: [{ min: 8, max: 99, price: 80 }] } },
+        commission: { type: 'pctPlusPerPerson', pct: 0.10, perPerson: 5 },
+        pricing: { type: 'tieredPerPerson', tiers: [{ min: 8, max: 999, price: 80 }] } },
       { name: 'Private Chef — Grill / BBQ', match: [['grill', 'bbq', 'barbecue']],
-        pricing: { type: 'tieredPerPerson', tiers: [{ min: 8, max: 99, price: 100 }] } },
+        commission: { type: 'pctPlusPerPerson', pct: 0.10, perPerson: 5 },
+        pricing: { type: 'tieredPerPerson', tiers: [{ min: 8, max: 999, price: 100 }] } },
       { name: 'Private Chef — Taco Night', match: [['taco']],
-        pricing: { type: 'tieredPerPerson', tiers: [{ min: 6, max: 99, price: 70 }] } },
-      // Add-ons: mimosas $15 / kids menu $25 have unclear per-person and
-      // commission treatment — flag rather than compute.
+        commission: { type: 'pctPlusPerPerson', pct: 0.10, perPerson: 5 },
+        pricing: { type: 'tieredPerPerson', tiers: [{ min: 6, max: 999, price: 70 }] } },
+      // Add-ons: still awaiting Josh's pricing/commission answer.
       { name: 'Private Chef — with add-ons (mimosas / kids menu)', match: [['mimosa', 'kids menu', 'kid’s menu', "kid's menu"]],
-        pricing: { type: 'review', reason: 'Add-on pricing (mimosas $15, kids menu $25) is unclear (per person? commission treatment?) — price manually.' } }
-    ]
-  },
-  {
-    id: 'flo-chef',
-    category: 'Private Cuisine',
-    formNames: ['Private Cookout', 'Paella', 'Cookout', 'Private Cookout & Paella'],
-    name: 'Private Cookout & Paella',
-    description: 'An authentic open-fire feast prepared live at your villa — paella and cookout menus that turn dinner into an event.',
-    commission: { type: 'flatPerPerson', value: 15 },
-    variants: [
+        pricing: { type: 'review', reason: 'Add-on pricing (mimosas $15, kids menu $25) still unresolved — price manually.' } },
       { name: 'Paella Experience', match: [['paella']],
-        pricing: { type: 'tieredPerPerson', tiers: [{ min: 1, max: 9, price: 55 }, { min: 10, max: 99, price: 50 }] } },
+        commission: { type: 'flatPerPerson', value: 15 },
+        pricing: { type: 'tieredPerPerson', tiers: [{ min: 1, max: 9, price: 55 }, { min: 10, max: 999, price: 50 }] } },
       { name: 'Cookout — Menu Option 1', match: [['cookout'], ['1', 'one']],
-        pricing: { type: 'perPerson', price: 75 } },
+        commission: { type: 'flatPerPerson', value: 15 },
+        pricing: { type: 'perPerson', price: 75, minPeople: 2 } },
       { name: 'Cookout — Menu Option 2', match: [['cookout'], ['2', 'two']],
-        pricing: { type: 'perPerson', price: 70 } },
+        commission: { type: 'flatPerPerson', value: 15 },
+        pricing: { type: 'perPerson', price: 70, minPeople: 2 } },
       { name: 'Cookout — Menu Option 3', match: [['cookout'], ['3', 'three']],
-        pricing: { type: 'perPerson', price: 70 } }
+        commission: { type: 'flatPerPerson', value: 15 },
+        pricing: { type: 'perPerson', price: 70, minPeople: 2 } }
     ]
   },
 
   // ───────────────────────────── MOMENTS ─────────────────────────────
-  {
-    id: 'beach-picnic',
-    category: 'Moments',
-    formNames: ['Beach Pic Nic', 'Beach Picnic', 'Pic Nic', 'Picnic'],
-    name: 'Luxury Beach Picnic',
-    description: 'A beautifully styled beachside picnic — an elegant setup, gourmet flavors, and the Caribbean as your backdrop.',
-    commission: { type: 'flat', value: 15 },
-    variants: [
-      { name: 'Breakfast Original Set Up', match: [['breakfast'], ['original', 'og']],
-        pricing: { type: 'flat', price: 88.5 } },
-      { name: 'Breakfast Royale Set Up', match: [['breakfast'], ['royale', 'royal']],
-        pricing: { type: 'flat', price: 115 } },
-      { name: 'Gourmet Charcuterie OG', match: [['charcuterie'], ['og', 'original']],
-        pricing: { type: 'flat', price: 108.5 } },
-      { name: 'Gourmet Charcuterie Royale', match: [['charcuterie'], ['royale', 'royal']],
-        pricing: { type: 'flat', price: 135 } },
-      { name: 'Dinner Package', match: [['dinner']],
-        pricing: { type: 'flat', price: 145 } },
-      // Unclear if the kids package is per child; flag rather than compute.
-      { name: 'Dinner Package Kids', match: [['kids', 'kid', 'children']],
-        pricing: { type: 'review', reason: 'Dinner Package Kids ($30) — unclear whether per child or per setup.' },
-        commission: { type: 'flat', value: 5 } }
-    ]
-  },
+  // NOTE: Beach Picnic was removed from Josh's edited info sheet, so it is
+  // no longer in the catalog. "Beach Pic Nic" submissions now get the warm
+  // personal-follow-up reply and a flag. Confirm with Josh this was intended.
   {
     id: 'floating-breakfast',
     category: 'Moments',
@@ -328,6 +301,8 @@ const CATALOG = [
     formNames: ['Balloon Decoration', 'Balloons'],
     name: 'Balloon Decoration',
     description: 'Celebration-ready balloon styling for birthdays, proposals, and special surprises.',
+    // Per Josh: ask for inspiration pictures, then he quotes personally.
+    quoteRequest: 'So we can create exactly what you have in mind, could you reply with a few inspiration pictures of the style you love? We’ll send you a personalized quote right away.',
     variants: [
       { name: 'Balloon Decoration', match: [], pricing: { type: 'quote' } }
     ]
@@ -338,6 +313,7 @@ const CATALOG = [
     formNames: ['Flower Arrangements', 'Flowers'],
     name: 'Flower Arrangements',
     description: 'Fresh, elegant floral arrangements delivered and styled for your special moment.',
+    quoteRequest: 'So we can create exactly what you have in mind, could you reply with a few inspiration pictures of the style you love? We’ll send you a personalized quote right away.',
     variants: [
       { name: 'Flower Arrangement', match: [], pricing: { type: 'quote' } }
     ]
@@ -350,12 +326,9 @@ const CATALOG = [
     formNames: ['Airport Transportation', 'Airport Transfer'],
     name: 'Airport Transportation',
     description: 'Seamless private transfers between the airport and your accommodation — relaxed, comfortable, and right on time.',
-    // Info sheet says commission is "$ on top" with no amount, and notes the
-    // 6–10 person prices have "no commission added" — the true guest price
-    // cannot be derived, so this always goes to owner review.
+    // Per Josh: personal follow-up (no automated pricing).
     variants: [
-      { name: 'Airport Transfer', match: [],
-        pricing: { type: 'review', reason: 'Commission is "$ on top" with no amount specified; guest price cannot be derived from the sheet.' } }
+      { name: 'Airport Transfer', match: [], pricing: { type: 'quote' } }
     ]
   },
   {
@@ -363,12 +336,30 @@ const CATALOG = [
     category: 'Transportation',
     formNames: ['Car Rental'],
     name: 'Car Rental',
-    description: 'Explore Aruba on your own terms with a quality rental delivered with airport pick-up included.',
-    // Per-day pricing needs rental length, and the security deposit's place
-    // on the invoice is unresolved — always goes to owner review.
+    description: 'Explore Aruba on your own terms with a quality rental — airport pick-up included.',
+    // Per Josh: no downpayment; guest confirms the price, then he confirms
+    // with the vendor; guest pays the rental company at pickup. The reply
+    // quotes the daily price and collects the booking details he needs.
+    inquiryQuestions: [
+      'that you’re happy with the price above',
+      'how many days you’d like the car',
+      'your full name',
+      'your flight arrival details',
+      'the best phone number to reach you',
+      'a picture of your ID (needed for the rental agreement)'
+    ],
+    inquiryNote: 'There is no downpayment for car rentals — the rental amount is paid directly to the rental company when they pick you up at the airport, and a refundable security deposit applies.',
     variants: [
-      { name: 'Car Rental', match: [],
-        pricing: { type: 'review', reason: 'Per-day pricing needs number of days, and deposit handling ($300–$500) on the invoice is undecided.' } }
+      { name: 'Sedan', match: [['sedan']],
+        pricing: { type: 'inquire', priceText: 'The Sedan is $50 per day with airport pick-up included (refundable security deposit: $300).' } },
+      { name: 'Mid-size SUV', match: [['mid-size', 'mid size', 'midsize']],
+        pricing: { type: 'inquire', priceText: 'The Mid-size SUV is $85 per day with airport pick-up included (refundable security deposit: $500).' } },
+      { name: 'SUV', match: [['suv']],
+        pricing: { type: 'inquire', priceText: 'The SUV is $100 per day with airport pick-up included (refundable security deposit: $500).' } },
+      { name: '11-Seater Van', match: [['van', '11']],
+        pricing: { type: 'inquire', priceText: 'The 11-Seater Van is $100 per day with airport pick-up included (refundable security deposit: $500).' } },
+      { name: 'Jeep', match: [['jeep']],
+        pricing: { type: 'inquire', priceText: 'The Jeep is $250 per day with airport pick-up included (refundable security deposit: $500).' } }
     ]
   }
 ];

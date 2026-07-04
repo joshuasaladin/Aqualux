@@ -112,8 +112,10 @@ function handleSubmission_(sub, message, reviewLabel) {
 
   if (pricing.status === 'review') {
     if (variant.pricing.type === 'quote') {
-      // In-catalog but unpriced (balloons, flowers): warm follow-up promise.
-      const email = composeFollowUpEmail(sub, service.name.toLowerCase());
+      // In-catalog but unpriced (balloons, flowers, airport transfers):
+      // warm follow-up — with the service's custom ask when defined
+      // (e.g. "send inspiration pictures").
+      const email = composeFollowUpEmail(sub, service.name.toLowerCase(), service.quoteRequest);
       const mode = deliverGuestEmail_(sub.email, email, null);
       markReview_(message, reviewLabel, service.name + ' needs a personal quote.');
       appendLog_(Object.assign(base, { service: service.name, status: 'needs-review', notes: 'Personal quote needed — follow-up ' + mode }));
@@ -121,6 +123,21 @@ function handleSubmission_(sub, message, reviewLabel) {
       markReview_(message, reviewLabel, service.name + ': ' + pricing.reason);
       appendLog_(Object.assign(base, { service: service.name, status: 'needs-review', notes: pricing.reason }));
     }
+    return;
+  }
+
+  // Quote-and-collect-details flow (car rental): price by email, no invoice;
+  // Josh confirms the booking with the vendor once the guest replies.
+  if (pricing.status === 'inquire') {
+    const qaInq = answerGuestQuestion_(sub, service);
+    const email = composeInquiryEmail(sub, service, variant, qaInq && qaInq.text);
+    const mode = deliverGuestEmail_(sub.email, email, null);
+    markReview_(message, reviewLabel, service.name + ' (' + variant.name + '): price quoted, awaiting guest confirmation + booking details.');
+    appendLog_(Object.assign(base, {
+      service: service.name + ' — ' + variant.name,
+      status: mode === 'draft' ? 'inquiry-draft' : 'inquiry-sent',
+      notes: 'No-invoice flow: guest pays vendor at pickup; awaiting confirmation + booking details'
+    }));
     return;
   }
 
@@ -146,8 +163,17 @@ function handleSubmission_(sub, message, reviewLabel) {
 
   const invoiceNumber = nextInvoiceNumber_();
   const invoice = generateInvoice_(sub, service, variant, pricing, invoiceNumber);
-  const email = composeInvoiceEmail(sub, service, variant, pricing, invoiceNumber, qa && qa.text);
-  const mode = deliverGuestEmail_(sub.email, email, [invoice.pdf]);
+  const attachments = [invoice.pdf];
+  let extraLine = null;
+  if (service.attachMenu) {
+    const menu = menuAttachment_();
+    if (menu) {
+      attachments.push(menu);
+      extraLine = 'You’ll find the menu attached to this email as well.';
+    }
+  }
+  const email = composeInvoiceEmail(sub, service, variant, pricing, invoiceNumber, qa && qa.text, extraLine);
+  const mode = deliverGuestEmail_(sub.email, email, attachments);
 
   appendLog_(Object.assign(base, {
     service: pricing.lineDescription,
@@ -180,6 +206,18 @@ function markReview_(message, reviewLabel, reason) {
   } catch (e) { /* labeling is best-effort */ }
   notifyOwner_('Needs review: ' + (message.getSubject() || '(no subject)'),
     reason + '\n\nOpen the original email (starred, label ' + CONFIG.REVIEW_LABEL + ') to act on it.');
+}
+
+/** The chef menu PDF from Drive, when configured; null otherwise. */
+function menuAttachment_() {
+  try {
+    const id = getProp_('CHEF_MENU_FILE_ID') || CONFIG.CHEF_MENU_FILE_ID;
+    if (!id) return null;
+    return DriveApp.getFileById(id).getBlob();
+  } catch (e) {
+    Logger.log('Menu attachment skipped — %s', e.message);
+    return null;
+  }
 }
 
 function isContactForm_(formName) {
