@@ -41,6 +41,8 @@ function generateInvoice_(sub, service, variant, pricing, invoiceNumber) {
     pricing.lineDescription, dateShort, pricing.peopleDisplay || '',
     pricing.downpayment, pricing.remaining, pricing.total
   ]]);
+  // Long service names wrap onto extra lines instead of being cut off.
+  sheet.getRange(row, 1).setWrap(true);
 
   sheet.getRange(cells.totalsDownpayment).setValue(pricing.downpayment);
   sheet.getRange(cells.totalsRemaining).setValue(pricing.remaining);

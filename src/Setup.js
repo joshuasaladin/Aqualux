@@ -54,9 +54,6 @@ function createInvoiceTemplate() {
   const ss = SpreadsheetApp.create('Aqua Lux Concierge Invoice — TEMPLATE');
   const s = ss.getSheets()[0].setName('Invoice');
 
-  s.setColumnWidths(1, 6, 120);
-  s.setColumnWidth(1, 220);
-
   s.getRange('A1').setValue(CONFIG.BUSINESS_NAME).setFontSize(22).setFontWeight('bold');
   s.getRange('A2').setValue('Invoice').setFontSize(14).setFontStyle('italic');
 
@@ -78,11 +75,51 @@ function createInvoiceTemplate() {
 
   s.getRange('A20').setValue('Totals').setFontWeight('bold');
   s.getRange('D19:F19').setValues([['Downpayment', 'Remaining balance', 'Total']]).setFontWeight('bold');
-  s.getRange('D16:F18').setNumberFormat('$#,##0.00');
-  s.getRange('D20:F20').setNumberFormat('$#,##0.00').setFontWeight('bold');
 
   s.getRange('A23').setValue('Notes:').setFontWeight('bold');
   CONFIG.INVOICE_NOTES.forEach((note, i) => s.getRange('A' + (24 + i)).setValue(note));
 
+  applyInvoiceLayout_(s);
   return ss.getId();
+}
+
+/**
+ * Fix the layout of your EXISTING invoice template (run once): wraps the
+ * description so long service names read fully on extra lines, widens the
+ * money columns, and stops "Remaining Balance" and "Total" overlapping.
+ */
+function fixInvoiceTemplate() {
+  const id = getProp_('INVOICE_TEMPLATE_ID') || CONFIG.INVOICE_TEMPLATE_ID;
+  if (!id) throw new Error('No invoice template configured — run setup() first.');
+  applyInvoiceLayout_(SpreadsheetApp.openById(id).getSheets()[0]);
+  Logger.log('Template layout fixed ✓  https://docs.google.com/spreadsheets/d/' + id);
+  Logger.log('Run testSampleSubmission() to see a fresh PDF with the new layout.');
+}
+
+/** Column widths, wrapping, and alignment shared by create + fix. */
+function applyInvoiceLayout_(s) {
+  s.setColumnWidth(1, 270); // Description — wide, wraps to extra lines
+  s.setColumnWidth(2, 90);  // Date
+  s.setColumnWidth(3, 65);  // People
+  s.setColumnWidth(4, 115); // Downpayment
+  s.setColumnWidth(5, 125); // Remaining Balance
+  s.setColumnWidth(6, 95);  // Total
+
+  // Table header: wrap so "Remaining Balance" stacks instead of spilling
+  // into "Total"; numbers right-aligned under their headers.
+  s.getRange('A15:F15').setWrap(true).setVerticalAlignment('middle');
+  s.setRowHeight(15, 40);
+  s.getRange('D15:F15').setHorizontalAlignment('right');
+  s.getRange('B15:C15').setHorizontalAlignment('center');
+
+  // Line items: description wraps (rows auto-grow); dates/people centered,
+  // money right-aligned. NOTE: no fixed row heights here — auto-height is
+  // what lets wrapped descriptions expand.
+  s.getRange('A16:A18').setWrap(true).setVerticalAlignment('top');
+  s.getRange('B16:C18').setHorizontalAlignment('center');
+  s.getRange('D16:F18').setHorizontalAlignment('right').setNumberFormat('$#,##0.00');
+
+  // Totals block: labels wrap and sit right-aligned above their amounts.
+  s.getRange('D19:F19').setWrap(true).setHorizontalAlignment('right').setVerticalAlignment('bottom');
+  s.getRange('D20:F20').setHorizontalAlignment('right').setNumberFormat('$#,##0.00').setFontWeight('bold');
 }
