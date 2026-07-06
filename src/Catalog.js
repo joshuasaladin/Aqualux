@@ -83,6 +83,7 @@ const CATALOG = [
     name: 'Private Sailing Charter',
     description: 'A fully private luxury sail with your own chef on board, premium liquor, and underwater scooters — the ultimate day on the water.',
     commission: { type: 'pct', value: 0.10 },
+    optionAsk: 'whether you would like the Half Day, Full Day, or Sunset sail',
     variants: [
       { name: 'Half Day Sail', match: [['half']], timing: '10:30 AM – 2:30 PM',
         pricing: { type: 'groupFormula', base: 2000, included: 6, extraPerPerson: 50, maxPeople: 15 } },
@@ -111,6 +112,7 @@ const CATALOG = [
     name: 'Water Sports',
     description: 'Pure adrenaline on the water — soar, splash, and speed along Aruba’s famous coastline.',
     partySizeIsVehicleCapacity: true,
+    optionAsk: 'which activity you would like — parasailing, tubing, or jet ski',
     variants: [
       { name: 'Parasailing', match: [['parasail']], timing: '10–12 minutes in the air; goes out hourly from 10am',
         pricing: { type: 'perPerson', price: 70 }, commission: { type: 'flatPerPerson', value: 20 } },
@@ -130,6 +132,8 @@ const CATALOG = [
     name: 'UTV Adventure',
     description: 'Take the wheel of your own UTV and roar through Aruba’s rugged outback — hidden beaches, desert trails, and natural pools await.',
     partySizeIsVehicleCapacity: true,
+    optionAsk: 'which UTV you would like — a 2-, 3-, 4-, or 5-seater (and whether you prefer the guided tour or a self-drive rental)',
+    askPickup: true,
     variants: [
       { name: 'UTV Guided Tour — 2-seater', match: [['tour'], ['2-seat', '2 seat', 'two seat']], timing: '9:00am – 1:00pm or 2:30pm – 6:30pm', seats: 2,
         pricing: { type: 'perVehicle', price: 190 }, commission: { type: 'flat', value: 20 } },
@@ -156,6 +160,8 @@ const CATALOG = [
     name: 'ATV Adventure',
     description: 'Ride an ATV across Aruba’s desert landscape — dramatic natural landmarks, rugged trails, and pure freedom on four wheels.',
     partySizeIsVehicleCapacity: true,
+    optionAsk: 'whether you would like a single-seater or a double-seater',
+    askPickup: true,
     variants: [
       { name: 'ATV Guided Tour — 1-seater', match: [['tour'], ['1-seat', '1 seat', 'one seat', 'single']], timing: '9:00am – 1:00pm or 2:30pm – 6:30pm', seats: 1,
         pricing: { type: 'perVehicle', price: 130 }, commission: { type: 'flat', value: 20 } },
@@ -207,17 +213,20 @@ const CATALOG = [
     name: 'Private In-Villa Massage',
     description: 'Resort-quality massage therapy brought directly to you — unwind with a private session at your villa, condo, or beachside.',
     commission: { type: 'pct', value: 0.30 },
+    // Per Josh: when the form names the massage type without a duration,
+    // don't ask — price the 60-minute session (default: true) and let the
+    // confirmation show "— 60 minutes" so the guest can correct it.
     variants: [
-      { name: 'Swedish Massage — 60 minutes', match: [['swedish'], ['60', 'hour']],
+      { name: 'Swedish Massage — 60 minutes', match: [['swedish'], ['60', 'hour']], default: true,
         pricing: { type: 'perPerson', price: 120 } },
       { name: 'Swedish Massage — 90 minutes', match: [['swedish'], ['90']],
         pricing: { type: 'perPerson', price: 170 } },
-      { name: 'Hot Stone Massage — 60 minutes', match: [['hot stone', 'hotstone'], ['60', 'hour']],
+      { name: 'Hot Stone Massage — 60 minutes', match: [['hot stone', 'hotstone'], ['60', 'hour']], default: true,
         pricing: { type: 'perPerson', price: 135 } },
       // Per Josh: $165 is the 90-minute Hot Stone.
       { name: 'Hot Stone Massage — 90 minutes', match: [['hot stone', 'hotstone'], ['90']],
         pricing: { type: 'perPerson', price: 165 } },
-      { name: 'Deep Tissue Massage — 60 minutes', match: [['deep'], ['60', 'hour']],
+      { name: 'Deep Tissue Massage — 60 minutes', match: [['deep'], ['60', 'hour']], default: true,
         pricing: { type: 'perPerson', price: 135 } },
       { name: 'Deep Tissue Massage — 90 minutes', match: [['deep'], ['90']],
         pricing: { type: 'perPerson', price: 155 } },
@@ -326,9 +335,11 @@ const CATALOG = [
     formNames: ['Airport Transportation', 'Airport Transfer'],
     name: 'Airport Transportation',
     description: 'Seamless private transfers between the airport and your accommodation — relaxed, comfortable, and right on time.',
-    // Per Josh: personal follow-up (no automated pricing).
+    // Per Josh: prepare a fill-in-the-price draft ("comes out to $____")
+    // asking for flight info, phone, and drop-off — he completes the amount
+    // before sending. Always a draft, never auto-sent.
     variants: [
-      { name: 'Airport Transfer', match: [], pricing: { type: 'quote' } }
+      { name: 'Airport Transfer', match: [], pricing: { type: 'manualQuote' } }
     ]
   },
   {
@@ -341,7 +352,6 @@ const CATALOG = [
     // with the vendor; guest pays the rental company at pickup. The reply
     // quotes the daily price and collects the booking details he needs.
     inquiryQuestions: [
-      'that you’re happy with the price above',
       'how many days you’d like the car',
       'your full name',
       'your flight arrival details',
@@ -428,6 +438,17 @@ function matchVariant(service, submission) {
     if (hits[0].match.length > hits[1].match.length) return { variant: hits[0] };
     return { candidates: hits };
   }
+
+  // Fallback: the first keyword group (the option's TYPE, e.g. "swedish")
+  // matched but a secondary group (e.g. duration) didn't. If exactly one of
+  // those partial matches is marked `default: true`, use it — per Josh, a
+  // "Swedish" choice prices the 60-minute session rather than asking.
+  const partial = service.variants.filter(v =>
+    (v.match || []).length > 1 && v.match[0].some(kw => keywordFound_(haystack, kw)));
+  const defaults = partial.filter(v => v.default);
+  if (defaults.length === 1) return { variant: defaults[0], assumedDefault: true };
+  if (partial.length) return { candidates: partial };
+
   return { variant: null };
 }
 

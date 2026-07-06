@@ -14,6 +14,11 @@ function priceSubmission(service, variant, sub) {
   if (pricing.type === 'quote') {
     return { status: 'review', reason: 'No price on file — personal follow-up promised to guest.' };
   }
+  if (pricing.type === 'manualQuote') {
+    // Fill-in-the-price draft for the owner (airport transfers) — always a
+    // Gmail draft with a $____ blank, never auto-sent.
+    return { status: 'manualQuote' };
+  }
   if (pricing.type === 'inquire') {
     // Quoted by email with booking questions (e.g. car rental) — no invoice;
     // Josh confirms the booking personally.

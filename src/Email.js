@@ -80,7 +80,7 @@ function composeFollowUpEmail(sub, serviceName, quoteRequest) {
 'Thank you for reaching out to Aqua Lux Aruba — we would love to arrange ' + what + ' for you.\n\n' +
 (quoteRequest
   ? quoteRequest + '\n\n'
-  : 'To make sure every detail is exactly right, Joshua will follow up with you personally with the ' +
+  : 'To make sure every detail is exactly right, I will follow up with you personally with the ' +
     'options and pricing, usually within the day.\n\n') +
 'Warm regards,\n' +
 'The Aqua Lux Aruba Team\n' +
@@ -105,15 +105,72 @@ function composeInquiryEmail(sub, service, variant, answerText) {
 'Thank you for your inquiry with Aqua Lux Aruba — great choice!\n\n' +
 variant.pricing.priceText + '\n\n' +
 (service.inquiryNote ? service.inquiryNote + '\n\n' : '') +
-'To confirm your booking, could you reply with:\n\n' +
+'Let me know if the price works for you — and to get your booking confirmed, could you also send me:\n\n' +
 (service.inquiryQuestions || []).map(q => '   •  ' + capitalize_(q)).join('\n') + '\n\n' +
 (answerText ? 'To your question — ' + answerText + '\n\n' : '') +
-'As soon as we have everything, Joshua will confirm your booking personally.\n\n' +
+'As soon as I have everything, I will confirm your booking personally.\n\n' +
 'Warm regards,\n' +
 'The Aqua Lux Aruba Team\n' +
 CONFIG.WEBSITE;
 
   const subject = 'Your Aqua Lux Aruba ' + service.name + ' Inquiry — ' + variant.name;
+  assertGuestSafe_(subject, 'email subject');
+  assertGuestSafe_(body, 'email body');
+  return { subject: subject, body: body };
+}
+
+/**
+ * Fill-in-the-price draft (airport transfers): states the total as $____
+ * for Josh to complete before sending, and collects flight info, phone,
+ * and drop-off. NEVER auto-sent — the caller always creates a draft.
+ */
+function composeManualQuoteEmail(sub, service) {
+  const first = sub.firstName || 'there';
+  const party = sub.partySize != null ? sub.partySize + ' people' : 'your party';
+  const dateLine = sub.date ? ' on ' + formatDateDisplay_(sub.date) : '';
+
+  const body =
+'Dear ' + first + ',\n\n' +
+'Thank you for your inquiry with Aqua Lux Aruba — I’d be happy to arrange your ' +
+service.name.toLowerCase() + dateLine + '.\n\n' +
+'The total for ' + party + ' comes out to $____.\n\n' +
+'To lock in your transfer, could you send me:\n\n' +
+'   •  Your flight information (airline, flight number, and arrival time)\n' +
+'   •  The best phone number to reach you\n' +
+'   •  Where you’ll need to be dropped off\n\n' +
+'Once I have these details, I will confirm everything right away.\n\n' +
+'Warm regards,\n' +
+'The Aqua Lux Aruba Team\n' +
+CONFIG.WEBSITE;
+
+  const subject = 'Your Aqua Lux Aruba ' + service.name + ' Inquiry';
+  assertGuestSafe_(subject, 'email subject');
+  assertGuestSafe_(body, 'email body');
+  return { subject: subject, body: body };
+}
+
+/**
+ * Menu email for Private Chef inquiries where the guest hasn't picked a
+ * menu yet: attaches the menus, lists per-person pricing for their group
+ * size, and asks which option they'd like.
+ */
+function composeMenuEmail(sub, service, optionLines, menuAttached) {
+  const first = sub.firstName || 'there';
+
+  const body =
+'Dear ' + first + ',\n\n' +
+'Thank you for your inquiry with Aqua Lux Aruba — we would love to arrange your ' + service.name + '.\n\n' +
+(menuAttached ? 'I’ve attached our menus for you to browse. ' : '') +
+(optionLines && optionLines.length
+  ? 'For your party of ' + sub.partySize + ', pricing per menu is:\n\n' +
+    optionLines.map(l => '   •  ' + l).join('\n') + '\n\n' +
+    'Which option would you like? As soon as I hear back, I’ll send over your confirmation and invoice right away.\n\n'
+  : 'So I can share exact per-person pricing, could you let me know how many people will be joining — and which menu you’d like?\n\n') +
+'Warm regards,\n' +
+'The Aqua Lux Aruba Team\n' +
+CONFIG.WEBSITE;
+
+  const subject = 'Your Aqua Lux Aruba ' + service.name + ' — menus & pricing';
   assertGuestSafe_(subject, 'email subject');
   assertGuestSafe_(body, 'email body');
   return { subject: subject, body: body };

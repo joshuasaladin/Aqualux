@@ -96,10 +96,24 @@ function handleSubmission_(sub, message, reviewLabel) {
   // Identify the exact variant (Big Breakfast vs Sweet, 2-seater vs 4-…).
   const match = matchVariant(service, sub);
   if (!match.variant) {
-    const ask = match.candidates
-      ? ['which option you would like: ' + match.candidates.map(v => v.name).join(', ')]
-      : ['which ' + service.name + ' option you would like'];
-    sendClarification_(sub, service, ask, message, reviewLabel, base);
+    // Private Chef with no menu picked: send the menus + per-person pricing
+    // for their group size instead of a bare "which option" question.
+    if (service.attachMenu) {
+      sendMenuOptions_(sub, service, message, reviewLabel, base);
+      return;
+    }
+    const asks = [];
+    if (match.candidates) {
+      asks.push('which option you would like: ' + match.candidates.map(v => v.name).join(', '));
+    } else if (service.optionAsk) {
+      asks.push(service.optionAsk);
+    } else {
+      asks.push('which ' + service.name + ' option you would like');
+    }
+    if (service.askPickup && !sub.whereStaying) {
+      asks.push('where you are staying, so the tour company can arrange pick-up');
+    }
+    sendClarification_(sub, service, asks, message, reviewLabel, base);
     return;
   }
   const variant = match.variant;
@@ -123,6 +137,20 @@ function handleSubmission_(sub, message, reviewLabel) {
       markReview_(message, reviewLabel, service.name + ': ' + pricing.reason);
       appendLog_(Object.assign(base, { service: service.name, status: 'needs-review', notes: pricing.reason }));
     }
+    return;
+  }
+
+  // Fill-in-the-price flow (airport transfers): ALWAYS a Gmail draft with a
+  // $____ blank for Josh to complete — never auto-sent, even off draft mode.
+  if (pricing.status === 'manualQuote') {
+    const email = composeManualQuoteEmail(sub, service);
+    GmailApp.createDraft(sub.email, email.subject, email.body, { name: CONFIG.BUSINESS_NAME });
+    markReview_(message, reviewLabel, service.name + ': draft ready — fill in the $____ amount before sending.');
+    appendLog_(Object.assign(base, {
+      service: service.name,
+      status: 'manual-quote-draft',
+      notes: 'Draft created with blank price — fill in and send'
+    }));
     return;
   }
 
@@ -190,12 +218,53 @@ function sendClarification_(sub, service, missing, message, reviewLabel, base) {
   const qa = CONFIG.DRAFT_MODE ? answerGuestQuestion_(sub, service) : null;
   const email = composeClarificationEmail(sub, service, missing, qa && qa.text);
   const mode = deliverGuestEmail_(sub.email, email, null);
-  markReview_(message, reviewLabel, 'Clarification requested from ' + (base.guestName || sub.email) + ': ' + missing.join('; '));
+  markReview_(message, reviewLabel,
+    'Clarification requested from ' + (base.guestName || sub.email) + ': ' + missing.join('; ') +
+    '\n\nWhat the form sent (for tuning the matcher):\n' + JSON.stringify(sub.fields, null, 2));
   appendLog_(Object.assign(base, {
     service: service ? service.name : sub.formName,
     status: mode === 'draft' ? 'clarification-draft' : 'clarification-sent',
     notes: 'Asked for: ' + missing.join('; ')
   }));
+}
+
+/** Private Chef, no menu picked: menus attached + per-person prices for their group. */
+function sendMenuOptions_(sub, service, message, reviewLabel, base) {
+  const lines = menuOptionLines_(service, sub.partySize);
+  const menu = menuAttachment_();
+  const email = composeMenuEmail(sub, service, lines, !!menu);
+  const mode = deliverGuestEmail_(sub.email, email, menu ? [menu] : null);
+  markReview_(message, reviewLabel,
+    service.name + ': menu options ' + (mode === 'draft' ? 'drafted' : 'sent') + ' — guest picking a menu.' +
+    '\n\nWhat the form sent (for tuning the matcher):\n' + JSON.stringify(sub.fields, null, 2));
+  appendLog_(Object.assign(base, {
+    service: service.name,
+    status: mode === 'draft' ? 'menu-options-draft' : 'menu-options-sent',
+    notes: 'Menu choice pending' + (sub.partySize ? ' (party of ' + sub.partySize + ')' : ' (party size unknown)')
+  }));
+}
+
+/**
+ * Per-person price lines for every menu available at the given party size,
+ * e.g. "Brunch — $70 per person". Empty when party size is unknown.
+ */
+function menuOptionLines_(service, partySize) {
+  if (partySize == null) return [];
+  const lines = [];
+  for (const v of service.variants) {
+    const p = v.pricing;
+    let price = null;
+    if (p.type === 'tieredPerPerson') {
+      const tier = p.tiers.find(t => partySize >= t.min && partySize <= t.max);
+      if (tier) price = tier.price;
+    } else if (p.type === 'perPerson' && (!p.minPeople || partySize >= p.minPeople)) {
+      price = p.price;
+    }
+    if (price != null) {
+      lines.push(v.name.replace(/^Private Chef — /, '') + ' — ' + money_(price) + ' per person');
+    }
+  }
+  return lines;
 }
 
 /** Star + label the original email and alert the owner. */
