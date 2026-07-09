@@ -16,6 +16,10 @@
  * visual marker only; the search never filters on it.
  */
 function processInbox() {
+  // Overlay live prices from the pricing sheet (if configured) so edits
+  // there apply to this run; a broken sheet falls back to built-in prices.
+  try { applyPricingOverrides_(); } catch (err) { pricingSheetProblem_(err); }
+
   const processedLabel = getOrCreateLabel_(CONFIG.PROCESSED_LABEL);
   const reviewLabel = getOrCreateLabel_(CONFIG.REVIEW_LABEL);
   const handledIds = processedMessageIds_();

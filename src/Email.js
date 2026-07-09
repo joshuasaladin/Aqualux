@@ -32,12 +32,9 @@ CONFIG.PAYMENT_OPTIONS.map(p => '   •  ' + p).join('\n') + '\n\n' +
 'Your invoice (' + invoiceNumber + ') is attached for your records. If any detail above isn\'t quite right, ' +
 'simply reply to this email and we will take care of it.\n\n' +
 'We look forward to making your time in Aruba unforgettable.\n\n' +
-'Warm regards,\n' +
-'The Aqua Lux Aruba Team\n' +
-CONFIG.WEBSITE;
+CONFIG.SIGNATURE;
 
-  const subject = 'Your Aqua Lux Aruba Reservation — ' + pricing.lineDescription +
-    (dateLine ? ' · ' + dateLine : '') + ' (Invoice ' + invoiceNumber + ')';
+  const subject = subjectFor_(service.name, sub);
 
   assertGuestSafe_(subject, 'email subject');
   assertGuestSafe_(body, 'email body');
@@ -56,11 +53,9 @@ function composeClarificationEmail(sub, service, missing, answerText) {
 missing.map(m => '   •  ' + capitalize_(m)) .join('\n') + '\n\n' +
 (answerText ? 'To your question — ' + answerText + '\n\n' : '') +
 'As soon as we hear back, we will send over your confirmation and invoice right away.\n\n' +
-'Warm regards,\n' +
-'The Aqua Lux Aruba Team\n' +
-CONFIG.WEBSITE;
+CONFIG.SIGNATURE;
 
-  const subject = 'Your Aqua Lux Aruba Inquiry — one quick question';
+  const subject = subjectFor_(service ? service.name : 'Your Aqua Lux Aruba Inquiry', sub);
   assertGuestSafe_(subject, 'email subject');
   assertGuestSafe_(body, 'email body');
   return { subject: subject, body: body };
@@ -82,11 +77,9 @@ function composeFollowUpEmail(sub, serviceName, quoteRequest) {
   ? quoteRequest + '\n\n'
   : 'To make sure every detail is exactly right, I will follow up with you personally with the ' +
     'options and pricing, usually within the day.\n\n') +
-'Warm regards,\n' +
-'The Aqua Lux Aruba Team\n' +
-CONFIG.WEBSITE;
+CONFIG.SIGNATURE;
 
-  const subject = 'Your Aqua Lux Aruba Inquiry — we\'re on it';
+  const subject = subjectFor_(serviceName ? titleCase_(serviceName) : 'Your Aqua Lux Aruba Inquiry', sub);
   assertGuestSafe_(subject, 'email subject');
   assertGuestSafe_(body, 'email body');
   return { subject: subject, body: body };
@@ -109,11 +102,9 @@ variant.pricing.priceText + '\n\n' +
 (service.inquiryQuestions || []).map(q => '   •  ' + capitalize_(q)).join('\n') + '\n\n' +
 (answerText ? 'To your question — ' + answerText + '\n\n' : '') +
 'As soon as I have everything, I will confirm your booking personally.\n\n' +
-'Warm regards,\n' +
-'The Aqua Lux Aruba Team\n' +
-CONFIG.WEBSITE;
+CONFIG.SIGNATURE;
 
-  const subject = 'Your Aqua Lux Aruba ' + service.name + ' Inquiry — ' + variant.name;
+  const subject = subjectFor_(service.name, sub);
   assertGuestSafe_(subject, 'email subject');
   assertGuestSafe_(body, 'email body');
   return { subject: subject, body: body };
@@ -139,11 +130,9 @@ service.name.toLowerCase() + dateLine + '.\n\n' +
 '   •  The best phone number to reach you\n' +
 '   •  Where you’ll need to be dropped off\n\n' +
 'Once I have these details, I will confirm everything right away.\n\n' +
-'Warm regards,\n' +
-'The Aqua Lux Aruba Team\n' +
-CONFIG.WEBSITE;
+CONFIG.SIGNATURE;
 
-  const subject = 'Your Aqua Lux Aruba ' + service.name + ' Inquiry';
+  const subject = subjectFor_(service.name, sub);
   assertGuestSafe_(subject, 'email subject');
   assertGuestSafe_(body, 'email body');
   return { subject: subject, body: body };
@@ -166,11 +155,9 @@ function composeMenuEmail(sub, service, optionLines, menuAttached) {
     optionLines.map(l => '   •  ' + l).join('\n') + '\n\n' +
     'Which option would you like? As soon as I hear back, I’ll send over your confirmation and invoice right away.\n\n'
   : 'So I can share exact per-person pricing, could you let me know how many people will be joining — and which menu you’d like?\n\n') +
-'Warm regards,\n' +
-'The Aqua Lux Aruba Team\n' +
-CONFIG.WEBSITE;
+CONFIG.SIGNATURE;
 
-  const subject = 'Your Aqua Lux Aruba ' + service.name + ' — menus & pricing';
+  const subject = subjectFor_(service.name, sub);
   assertGuestSafe_(subject, 'email subject');
   assertGuestSafe_(body, 'email body');
   return { subject: subject, body: body };
@@ -205,6 +192,19 @@ function guestLocation_(sub) {
   // (e.g. "We are at casa Hermanas Diamanté"). Long notes are left off.
   if (sub.questions && sub.questions.length <= 80) return sub.questions.replace(/^we(\s+are|'re)\s+(at|in|staying at)\s+/i, '');
   return staying || null;
+}
+
+
+/**
+ * Short subject per Josh: just the activity and the requested date,
+ * e.g. "Floating Breakfast — July 9, 2026".
+ */
+function subjectFor_(activity, sub) {
+  return activity + (sub.date ? ' — ' + formatDateMedium_(sub.date) : '');
+}
+
+function titleCase_(s) {
+  return String(s).replace(/\b\w/g, c => c.toUpperCase());
 }
 
 function capitalize_(s) {

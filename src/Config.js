@@ -57,6 +57,16 @@ const CONFIG = {
   // date within this window is treated as a duplicate (flagged, not invoiced).
   DUPLICATE_WINDOW_DAYS: 30,
 
+  // Signature appended to every guest email draft.
+  SIGNATURE:
+    'Warm regards,\n\n' +
+    'Isabella Frieri\n' +
+    'Co-Founder | Aqua Lux Aruba\n' +
+    'aqualuxaruba@gmail.com\n' +
+    '+297 5670134\n' +
+    'www.aqualuxaruba.com\n' +
+    'Instagram: @aqualux.aruba',
+
   PAYMENT_OPTIONS: [
     'Zelle: aqualuxaruba@gmail.com',
     'Venmo: @AquaLuxAruba',

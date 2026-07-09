@@ -57,6 +57,7 @@ function parseSample_() {
 
 /** Step 1: inspect every computed value without touching anything. */
 function dryRunSample() {
+  try { const n = applyPricingOverrides_(); Logger.log('Live pricing overrides applied: %s', n); } catch (e) { Logger.log('Pricing sheet skipped: %s', e.message); }
   const sub = parseSample_();
   Logger.log('Parsed submission: %s', JSON.stringify(sub, null, 2));
 

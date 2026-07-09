@@ -163,6 +163,10 @@ function formatDateShort_(date) {
   return Utilities.formatDate(date, CONFIG.TIMEZONE, 'MM/dd/yyyy');
 }
 
+function formatDateMedium_(date) {
+  return Utilities.formatDate(date, CONFIG.TIMEZONE, 'MMMM d, yyyy');
+}
+
 function cleanEmail_(raw) {
   if (!raw) return null;
   const m = String(raw).match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
