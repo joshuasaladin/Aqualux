@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aqualux CRM</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💧</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="login-screen" class="login-screen hidden">
+  <div class="login-card">
+    <div class="brand"><span class="brand-drop">💧</span> Aqualux <span class="brand-sub">CRM</span></div>
+    <p>Enter your admin password to continue.</p>
+    <form id="login-form">
+      <input type="password" id="login-password" placeholder="Password" autocomplete="current-password" required>
+      <button type="submit" class="btn btn-primary">Sign in</button>
+      <div id="login-error" class="login-error"></div>
+    </form>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+  <header class="topbar">
+    <div class="brand"><span class="brand-drop">💧</span> Aqualux <span class="brand-sub">Concierge CRM</span></div>
+    <nav>
+      <button class="nav-btn active" data-view="dashboard">Dashboard</button>
+      <button class="nav-btn" data-view="requests">Requests</button>
+      <button class="nav-btn" data-view="clients">Clients</button>
+    </nav>
+    <button class="btn btn-primary" id="btn-new-request">+ New request</button>
+  </header>
+
+  <main>
+    <!-- ============================ DASHBOARD ============================ -->
+    <section id="view-dashboard" class="view">
+      <div class="stat-grid" id="stat-grid"></div>
+      <h2>Recently updated</h2>
+      <div id="dash-recent" class="card-list"></div>
+    </section>
+
+    <!-- ============================ REQUESTS ============================= -->
+    <section id="view-requests" class="view hidden">
+      <div class="filters">
+        <input type="search" id="req-search" placeholder="Search name, email, service…">
+        <select id="req-status">
+          <option value="">All statuses</option>
+          <option value="new">New</option>
+          <option value="contacted">Contacted</option>
+          <option value="quoted">Quoted</option>
+          <option value="in_progress">In progress</option>
+          <option value="completed">Completed</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+        <select id="req-payment">
+          <option value="">All payments</option>
+          <option value="unpaid">Unpaid</option>
+          <option value="deposit_paid">Deposit paid</option>
+          <option value="paid">Paid in full</option>
+          <option value="refunded">Refunded</option>
+        </select>
+      </div>
+      <div id="req-list" class="card-list"></div>
+    </section>
+
+    <!-- ============================ CLIENTS ============================== -->
+    <section id="view-clients" class="view hidden">
+      <div class="filters">
+        <input type="search" id="client-search" placeholder="Search clients…">
+      </div>
+      <div id="client-list" class="card-list"></div>
+    </section>
+  </main>
+</div>
+
+<!-- ======================= REQUEST DETAIL DRAWER ======================== -->
+<div id="drawer-backdrop" class="drawer-backdrop hidden"></div>
+<aside id="drawer" class="drawer hidden">
+  <div id="drawer-content"></div>
+</aside>
+
+<!-- ========================= NEW REQUEST MODAL ========================== -->
+<div id="modal-backdrop" class="modal-backdrop hidden">
+  <div class="modal">
+    <h2>New service request</h2>
+    <form id="new-request-form">
+      <div class="form-row">
+        <label>Client name *<input name="name" required placeholder="Jane Smith"></label>
+        <label>Email *<input name="email" type="email" required placeholder="jane@example.com"></label>
+      </div>
+      <div class="form-row">
+        <label>Phone<input name="phone" placeholder="+297 …"></label>
+        <label>Service *<input name="service" required placeholder="Yacht charter, private chef…"></label>
+      </div>
+      <label>Details<textarea name="details" rows="3" placeholder="What did they ask for?"></textarea></label>
+      <div class="form-row">
+        <label>Quoted amount<input name="quoted_amount" type="number" min="0" step="0.01" placeholder="0.00"></label>
+        <label>Currency
+          <select name="currency"><option>USD</option><option>AWG</option><option>EUR</option></select>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="modal-cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create request</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
