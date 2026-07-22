@@ -8,12 +8,15 @@
  * GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET env vars. Tokens live in the DB.
  */
 import crypto from 'node:crypto';
-import { db, getSetting, setSetting, deleteSetting, upsertClient, touchLead } from './db.js';
+import { db, getSetting, setSetting, deleteSetting, upsertClient, touchLead, markThreadProcessed } from './db.js';
 
 const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send';
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 
-const SKIP_SENDERS = /no-?reply|donotreply|mailer-daemon|notification|newsletter/i;
+// Bulk/marketing sender addresses — never real people.
+const SKIP_SENDERS = /no-?reply|donotreply|mailer-daemon|notifications?@|newsletter|marketing@|promo(?:tions?)?@|offers?@|deals@|@e?mail\.|@e\./i;
+// Gmail's own categorization: promotions/social/spam are not leads.
+const SKIP_LABELS = new Set(['CATEGORY_PROMOTIONS', 'CATEGORY_SOCIAL', 'SPAM']);
 
 export function getCredentials() {
   const stored = getSetting('gmail_credentials', {});
@@ -162,6 +165,109 @@ function parseFrom(fromHeader) {
   return { name: '', email: fromHeader.trim().toLowerCase() };
 }
 
+/** Is this bulk/marketing mail rather than a real person? */
+export function isBulkMail(msg, from) {
+  if (SKIP_SENDERS.test(from.email)) return true;
+  if ((msg.labelIds || []).some((l) => SKIP_LABELS.has(l))) return true;
+  if (header(msg, 'List-Unsubscribe')) return true;
+  if (/^(bulk|list)$/i.test(header(msg, 'Precedence'))) return true;
+  return false;
+}
+
+// ------------------------------------------------- website form emails ----
+/**
+ * Wix (and similar form services) email you a "Submission summary" with
+ * "Label:" / value pairs. Parse it so the lead belongs to the real visitor —
+ * their name and email — instead of the form service's address.
+ */
+export function parseFormSubmission(from, bodyText) {
+  const looksLikeForm = /wix-forms\.com|wixforms|formsubmit/i.test(from.email) ||
+    /submitted your form|submission summary/i.test(bodyText);
+  if (!looksLikeForm) return null;
+
+  const formName = bodyText.match(/submitted your form\s+["“]?(.+?)["”]?\s+on\s/i)?.[1]?.trim() || '';
+
+  // Collect "Label:" -> value pairs ("Label:\nvalue" or "Label: value")
+  const lines = bodyText.split('\n').map((l) => l.trim());
+  const fields = {};
+  const order = [];
+  const isLabel = (l) => /^(.{1,60}?)\s*:\s*$/.test(l);
+  for (let i = 0; i < lines.length; i++) {
+    let label = null, value = '';
+    const block = lines[i].match(/^(.{1,60}?)\s*:\s*$/);
+    const inline = lines[i].match(/^(.{1,60}?):\s+(.+)$/);
+    if (block) {
+      label = block[1];
+      const vals = [];
+      let j = i + 1;
+      while (j < lines.length && !isLabel(lines[j]) && !/^(.{1,60}?):\s+.+$/.test(lines[j])) {
+        if (/^view submissions?$/i.test(lines[j])) break; // Wix footer button
+        if (lines[j]) vals.push(lines[j]);
+        j++;
+      }
+      value = vals.join(' ').trim();
+      i = j - 1;
+    } else if (inline && !/^https?:/i.test(inline[2])) {
+      label = inline[1];
+      value = inline[2].trim();
+    }
+    if (label && value) {
+      fields[label.toLowerCase().replace(/\?+$/, '').trim()] = value;
+      order.push([label.replace(/\?+$/, '').trim(), value]);
+    }
+  }
+
+  const pick = (...names) => {
+    for (const n of names) if (fields[n]) return fields[n];
+    return '';
+  };
+  const email = pick('email', 'e-mail', 'email address').match(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/)?.[0]?.toLowerCase();
+  if (!email) return null;
+
+  const name = [pick('first name'), pick('last name')].filter(Boolean).join(' ') ||
+    pick('name', 'full name') || email;
+  const phone = pick('phone', 'phone number', 'mobile');
+  const partySize = parseInt(pick('people', 'guests', 'number of people', 'party size', 'how many people'), 10) || null;
+  const activity = pick('choose the activity', 'activity', 'service', 'choose a service');
+
+  let serviceDate = null;
+  const rawDate = pick('select a date', 'date', 'service date', 'preferred date');
+  if (rawDate) {
+    const iso = rawDate.match(/\d{4}-\d{2}-\d{2}/)?.[0];
+    if (iso) serviceDate = iso;
+    else {
+      const d = new Date(rawDate);
+      if (!isNaN(d)) serviceDate = d.toISOString().slice(0, 10);
+    }
+  }
+
+  const details = order
+    .filter(([label]) => !/^(submission summary|view submissions?)$/i.test(label))
+    .map(([label, value]) => `${label}: ${value}`).join('\n');
+
+  return {
+    formName: formName || 'Website form',
+    service: [formName, activity].filter(Boolean).join(' — ') || activity || 'Website inquiry',
+    name, email, phone, partySize, serviceDate, details
+  };
+}
+
+function createLeadFromForm(form, msg) {
+  const client = upsertClient({ name: form.name, email: form.email, phone: form.phone });
+  const info = db.prepare(`
+    INSERT INTO leads (client_id, subject, service, service_date, party_size, source)
+    VALUES (?, ?, ?, ?, ?, 'website_form')`)
+    .run(client.id, form.formName, form.service, form.serviceDate, form.partySize);
+  db.prepare(`
+    INSERT INTO messages (lead_id, gmail_message_id, direction, from_email, subject, body, sent_at)
+    VALUES (?, ?, 'in', ?, ?, ?, ?)`)
+    .run(info.lastInsertRowid, msg.id, form.email, form.formName,
+         `Website form submission — ${form.formName}\n\n${form.details}`,
+         new Date(Number(msg.internalDate)).toISOString());
+  recomputeStatus(info.lastInsertRowid);
+  return info.lastInsertRowid;
+}
+
 // --------------------------------------------------------------- sync -----
 let syncing = false;
 
@@ -177,13 +283,26 @@ export async function syncNow() {
     // 1. New inbox threads -> new leads
     const list = await apiGet(`/threads?q=${encodeURIComponent(`in:inbox after:${since}`)}&maxResults=50`);
     for (const t of list.threads || []) {
-      const exists = db.prepare(`SELECT id FROM leads WHERE gmail_thread_id = ?`).get(t.id);
-      if (exists) continue;
+      if (db.prepare(`SELECT id FROM leads WHERE gmail_thread_id = ?`).get(t.id)) continue;
+      if (db.prepare(`SELECT 1 FROM processed_threads WHERE thread_id = ?`).get(t.id)) continue;
       const thread = await apiGet(`/threads/${t.id}?format=full`);
       const first = thread.messages?.[0];
       if (!first) continue;
       const from = parseFrom(header(first, 'From'));
-      if (!from.email || from.email === myEmail || SKIP_SENDERS.test(from.email)) continue;
+      if (!from.email || from.email === myEmail) { markThreadProcessed(t.id); continue; }
+
+      // Website form notification? Lead belongs to the visitor, not the form service.
+      const form = parseFormSubmission(from, extractText(first.payload) || first.snippet || '');
+      if (form) {
+        createLeadFromForm(form, first);
+        markThreadProcessed(t.id);
+        created++;
+        continue;
+      }
+
+      // Bulk / promotional mail is not a lead.
+      if (isBulkMail(first, from)) { markThreadProcessed(t.id); continue; }
+
       const client = upsertClient({ name: from.name, email: from.email });
       const subject = header(first, 'Subject') || '(no subject)';
       const info = db.prepare(`
@@ -282,7 +401,9 @@ export async function sendReply(lead, client, bodyText) {
     'Content-Type: text/plain; charset="UTF-8"',
     'Content-Transfer-Encoding: 7bit'
   ];
-  if (lastIn?.rfc_message_id) {
+  // Only reference the previous email when replying inside a real Gmail
+  // thread. Form leads have no client thread yet — the first reply starts one.
+  if (lead.gmail_thread_id && lastIn?.rfc_message_id) {
     headers.push(`In-Reply-To: ${lastIn.rfc_message_id}`, `References: ${lastIn.rfc_message_id}`);
   }
   const raw = Buffer.from(headers.join('\r\n') + '\r\n\r\n' + bodyText)

@@ -52,6 +52,22 @@ db.exec(`
     sent_at          TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS lead_services (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id         INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL DEFAULT '',
+    downpayment     REAL NOT NULL DEFAULT 0,
+    downpayment_paid INTEGER NOT NULL DEFAULT 0,
+    balance         REAL NOT NULL DEFAULT 0,
+    balance_paid    INTEGER NOT NULL DEFAULT 0
+  );
+
+  -- Gmail threads already handled (form emails, skipped promos, deleted
+  -- leads) so a sync never re-imports them.
+  CREATE TABLE IF NOT EXISTS processed_threads (
+    thread_id TEXT PRIMARY KEY
+  );
+
   CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -61,7 +77,21 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_leads_status   ON leads(status);
   CREATE INDEX IF NOT EXISTS idx_leads_date     ON leads(service_date);
   CREATE INDEX IF NOT EXISTS idx_messages_lead  ON messages(lead_id);
+  CREATE INDEX IF NOT EXISTS idx_services_lead  ON lead_services(lead_id);
 `);
+
+// Additive migrations so an existing database upgrades in place.
+function ensureColumn(table, col, ddl) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+}
+ensureColumn('leads', 'party_size', 'party_size INTEGER');
+ensureColumn('leads', 'source', `source TEXT NOT NULL DEFAULT 'email'`);
+
+export function markThreadProcessed(threadId) {
+  if (!threadId) return;
+  db.prepare(`INSERT OR IGNORE INTO processed_threads (thread_id) VALUES (?)`).run(threadId);
+}
 
 export function getSetting(key, fallback = null) {
   const row = db.prepare(`SELECT value FROM settings WHERE key = ?`).get(key);

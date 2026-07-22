@@ -16,7 +16,11 @@ export function seedDemo() {
     {
       client: { name: 'Isabella Romero', email: 'isabella.romero@example.com', phone: '+297 561 0192' },
       subject: 'Sunset yacht charter for 8', service: 'Private yacht charter',
-      service_date: day(3), paid: 0, confirmed: 1, price: 2400,
+      service_date: day(3), paid: 0, confirmed: 1, price: 2400, party_size: 8,
+      services: [
+        ['Catamaran sunset charter', 1200, 1, 1200, 0],
+        ['Onboard dinner (chef)', 0, 0, 400, 0],
+      ],
       msgs: [
         ['in',  at(4, 9),  'Hi! We would love a sunset charter for 8 guests — it is our anniversary. Do you offer dinner on board?'],
         ['out', at(4, 11), 'Congratulations! Yes — we have a catamaran with a private chef option. Sending three packages now.'],
@@ -58,9 +62,16 @@ export function seedDemo() {
   for (const item of demo) {
     const client = upsertClient(item.client);
     const info = db.prepare(`
-      INSERT INTO leads (client_id, subject, service, service_date, paid, booking_confirmed, price)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .run(client.id, item.subject, item.service, item.service_date, item.paid, item.confirmed, item.price);
+      INSERT INTO leads (client_id, subject, service, service_date, paid, booking_confirmed, price, party_size)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(client.id, item.subject, item.service, item.service_date, item.paid, item.confirmed, item.price,
+           item.party_size || null);
+    for (const s of item.services || []) {
+      db.prepare(`
+        INSERT INTO lead_services (lead_id, name, downpayment, downpayment_paid, balance, balance_paid)
+        VALUES (?, ?, ?, ?, ?, ?)`)
+        .run(info.lastInsertRowid, s[0], s[1], s[2], s[3], s[4]);
+    }
     for (const [direction, sentAt, body] of item.msgs) {
       db.prepare(`
         INSERT INTO messages (lead_id, direction, from_email, subject, body, sent_at)

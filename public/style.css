@@ -170,6 +170,23 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--aqua); outl
 .send-status { font-size: .82rem; color: var(--muted); }
 .send-status.err { color: var(--red); }
 
+/* ------------------------------------------------------- services rows --- */
+.svc-head, .svc-row {
+  display: grid;
+  grid-template-columns: 1fr 90px 52px 90px 52px 30px;
+  gap: 6px; align-items: center; margin-bottom: 6px;
+}
+.svc-head { font-size: .72rem; color: var(--muted); font-weight: 650; text-transform: uppercase; letter-spacing: .4px; }
+.svc-row input[type="number"] { padding: 7px 8px; font-size: .86rem; }
+.svc-row .svc-name { padding: 7px 10px; font-size: .88rem; }
+.mini { display: flex; align-items: center; gap: 3px; font-size: .72rem; color: var(--muted); cursor: pointer; }
+.mini input { width: auto; accent-color: var(--green); }
+.svc-del { padding: 4px 8px; }
+.svc-totals { margin-top: 10px; font-size: .88rem; color: var(--muted); }
+.svc-totals .ok { color: var(--green); }
+.svc-totals .due { color: var(--red); }
+.owed { font-size: .8rem; color: var(--amber); font-weight: 600; }
+
 /* ------------------------------------------------------------ calendar --- */
 .cal-header { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
 .cal-header h2 { margin: 0; flex: 1; text-align: center; }

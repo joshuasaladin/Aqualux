@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { db, touchLead, upsertClient, setSetting, getSetting, LEAD_ORDER } from './db.js';
+import { db, touchLead, upsertClient, setSetting, markThreadProcessed, LEAD_ORDER } from './db.js';
 import * as gmail from './gmail.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -116,8 +116,16 @@ app.post('/api/gmail/disconnect', (req, res) => {
 
 // --------------------------------------------------------------- leads ----
 const LEAD_SELECT = `
-  SELECT l.*, c.name AS client_name, c.email AS client_email, c.phone AS client_phone
-  FROM leads l JOIN clients c ON c.id = l.client_id`;
+  SELECT l.*, c.name AS client_name, c.email AS client_email, c.phone AS client_phone,
+         COALESCE(s.total, 0) AS services_total,
+         COALESCE(s.owed, 0)  AS services_owed
+  FROM leads l JOIN clients c ON c.id = l.client_id
+  LEFT JOIN (
+    SELECT lead_id,
+           SUM(downpayment + balance) AS total,
+           SUM(downpayment * (1 - downpayment_paid) + balance * (1 - balance_paid)) AS owed
+    FROM lead_services GROUP BY lead_id
+  ) s ON s.lead_id = l.id`;
 
 app.get('/api/leads', (req, res) => {
   const { q, tab } = req.query;
@@ -152,6 +160,8 @@ function getLeadFull(id) {
   lead.messages = db.prepare(`
     SELECT id, direction, from_email, subject, body, sent_at
     FROM messages WHERE lead_id = ? ORDER BY sent_at ASC, id ASC`).all(id);
+  lead.services = db.prepare(`
+    SELECT * FROM lead_services WHERE lead_id = ? ORDER BY id ASC`).all(id);
   return lead;
 }
 
@@ -176,7 +186,7 @@ app.patch('/api/leads/:id', (req, res) => {
   const id = req.params.id;
   const lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(id);
   if (!lead) return res.status(404).json({ error: 'Not found' });
-  const { service, service_date, paid, booking_confirmed, price, notes, status } = req.body || {};
+  const { service, service_date, paid, booking_confirmed, price, notes, status, party_size, services } = req.body || {};
   if (service !== undefined) db.prepare(`UPDATE leads SET service = ? WHERE id = ?`).run(service, id);
   if (service_date !== undefined) {
     db.prepare(`UPDATE leads SET service_date = ? WHERE id = ?`).run(service_date || null, id);
@@ -187,14 +197,32 @@ app.patch('/api/leads/:id', (req, res) => {
   }
   if (price !== undefined) db.prepare(`UPDATE leads SET price = ? WHERE id = ?`).run(Number(price) || 0, id);
   if (notes !== undefined) db.prepare(`UPDATE leads SET notes = ? WHERE id = ?`).run(notes, id);
+  if (party_size !== undefined) {
+    db.prepare(`UPDATE leads SET party_size = ? WHERE id = ?`).run(parseInt(party_size, 10) || null, id);
+  }
   if (status !== undefined && ['new_lead', 'responded', 'new_mail'].includes(status)) {
     db.prepare(`UPDATE leads SET status = ? WHERE id = ?`).run(status, id);
+  }
+  if (Array.isArray(services)) {
+    db.prepare(`DELETE FROM lead_services WHERE lead_id = ?`).run(id);
+    const ins = db.prepare(`
+      INSERT INTO lead_services (lead_id, name, downpayment, downpayment_paid, balance, balance_paid)
+      VALUES (?, ?, ?, ?, ?, ?)`);
+    for (const s of services) {
+      if (!s || (!s.name && !s.downpayment && !s.balance)) continue;
+      ins.run(id, String(s.name || '').slice(0, 200),
+              Number(s.downpayment) || 0, s.downpayment_paid ? 1 : 0,
+              Number(s.balance) || 0, s.balance_paid ? 1 : 0);
+    }
   }
   touchLead(id);
   res.json(getLeadFull(id));
 });
 
 app.delete('/api/leads/:id', (req, res) => {
+  const lead = db.prepare(`SELECT gmail_thread_id FROM leads WHERE id = ?`).get(req.params.id);
+  // Remember the thread so the next sync doesn't re-import a deleted lead.
+  if (lead?.gmail_thread_id) markThreadProcessed(lead.gmail_thread_id);
   db.prepare(`DELETE FROM leads WHERE id = ?`).run(req.params.id);
   res.json({ ok: true });
 });

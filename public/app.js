@@ -112,17 +112,20 @@ function refreshCurrentView() { showView(currentView); }
 /* -------------------------------------------------------------- leads --- */
 function leadCard(l) {
   const done = l.paid && l.booking_confirmed;
+  const total = l.services_total || l.price || 0;
+  const owed = l.services_total ? l.services_owed : 0;
   return `
   <div class="card ${done ? 'done' : ''}" data-lead="${l.id}">
     <div class="card-top">
       <span class="card-title">${esc(l.client_name)}</span>
       ${statusBadge(l.status)} ${payBadge(l.paid)} ${bookBadge(l.booking_confirmed)}
       <span class="card-right">
-        ${l.price ? `<span class="card-amount">${money(l.price)}</span>` : ''}
+        ${total ? `<span class="card-amount">${money(total)}${owed > 0 && owed < total ?
+          ` <span class="owed">(${money(owed)} due)</span>` : ''}</span>` : ''}
         ${svcDateBadge(l.service_date)}
       </span>
     </div>
-    <div class="card-sub">✉️ ${esc(l.client_email)} · ${esc(l.service || l.subject || '—')}
+    <div class="card-sub">✉️ ${esc(l.client_email)}${l.party_size ? ` · 👥 ${l.party_size}` : ''} · ${esc(l.service || l.subject || '—')}
       ${l.last_msg_at ? ` · last email ${timeAgo(l.last_msg_at)}` : ''}</div>
   </div>`;
 }
@@ -273,6 +276,10 @@ async function openLead(id) {
         <label>Service requested<input id="d-service" value="${esc(l.service)}" placeholder="e.g. Yacht charter"></label>
         <label>Service date<input id="d-date" type="date" value="${l.service_date || ''}"></label>
       </div>
+      <div class="form-row">
+        <label>How many people<input id="d-party" type="number" min="1" step="1" value="${l.party_size || ''}" placeholder="e.g. 8"></label>
+        <label>Notes<input id="d-notes" value="${esc(l.notes)}" placeholder="Internal notes…"></label>
+      </div>
       <div class="toggle-row">
         <label class="toggle ${l.paid ? 'on-paid' : ''}">
           <input type="checkbox" id="d-paid" ${l.paid ? 'checked' : ''}> Paid ${l.paid ? '✓' : ''}
@@ -281,12 +288,16 @@ async function openLead(id) {
           <input type="checkbox" id="d-confirmed" ${l.booking_confirmed ? 'checked' : ''}> Booking confirmed ${l.booking_confirmed ? '✓' : ''}
         </label>
       </div>
-      <div class="form-row">
-        <label>Price<input id="d-price" type="number" min="0" step="0.01" value="${l.price || ''}" placeholder="0.00"></label>
-        <label>Notes<input id="d-notes" value="${esc(l.notes)}" placeholder="Internal notes…"></label>
-      </div>
       <button class="btn btn-primary btn-sm" id="d-save">Save</button>
       <span class="send-status" id="d-save-status"></span>
+    </div>
+
+    <div class="panel">
+      <h3>Services &amp; payments</h3>
+      <div class="svc-head"><span>Service</span><span>Down payment</span><span></span><span>Balance</span><span></span><span></span></div>
+      <div id="svc-rows"></div>
+      <button class="btn btn-sm" id="svc-add">+ Add service</button>
+      <div class="svc-totals" id="svc-totals"></div>
     </div>
 
     <div class="panel">
@@ -316,6 +327,46 @@ async function openLead(id) {
     e.preventDefault(); closeDrawer(); showView('settings');
   });
 
+  // --- services editor ---
+  const svcRows = $('#svc-rows');
+  function addServiceRow(s = {}) {
+    const row = document.createElement('div');
+    row.className = 'svc-row';
+    row.innerHTML = `
+      <input class="svc-name" placeholder="e.g. Boat day" value="${esc(s.name || '')}">
+      <input class="svc-down" type="number" min="0" step="0.01" placeholder="0" value="${s.downpayment || ''}">
+      <label class="mini" title="Down payment received"><input type="checkbox" class="svc-down-paid" ${s.downpayment_paid ? 'checked' : ''}>paid</label>
+      <input class="svc-bal" type="number" min="0" step="0.01" placeholder="0" value="${s.balance || ''}">
+      <label class="mini" title="Balance received"><input type="checkbox" class="svc-bal-paid" ${s.balance_paid ? 'checked' : ''}>paid</label>
+      <button class="btn btn-sm svc-del" title="Remove">×</button>`;
+    row.querySelector('.svc-del').addEventListener('click', () => { row.remove(); updateTotals(); });
+    row.querySelectorAll('input').forEach((i) => i.addEventListener('input', updateTotals));
+    svcRows.appendChild(row);
+  }
+  function collectServices() {
+    return [...svcRows.querySelectorAll('.svc-row')].map((r) => ({
+      name: r.querySelector('.svc-name').value.trim(),
+      downpayment: Number(r.querySelector('.svc-down').value) || 0,
+      downpayment_paid: r.querySelector('.svc-down-paid').checked,
+      balance: Number(r.querySelector('.svc-bal').value) || 0,
+      balance_paid: r.querySelector('.svc-bal-paid').checked
+    })).filter((s) => s.name || s.downpayment || s.balance);
+  }
+  function updateTotals() {
+    const list = collectServices();
+    const total = list.reduce((a, s) => a + s.downpayment + s.balance, 0);
+    const received = list.reduce((a, s) =>
+      a + (s.downpayment_paid ? s.downpayment : 0) + (s.balance_paid ? s.balance : 0), 0);
+    $('#svc-totals').innerHTML = total
+      ? `Total <b>${money(total)}</b> · Received <b class="ok">${money(received)}</b> · Still due <b class="${total - received > 0 ? 'due' : 'ok'}">${money(total - received)}</b>`
+      : '';
+  }
+  if (l.services.length) l.services.forEach(addServiceRow);
+  else if (l.price > 0) addServiceRow({ name: l.service, balance: l.price });
+  else addServiceRow();
+  updateTotals();
+  $('#svc-add').addEventListener('click', () => addServiceRow());
+
   $('#d-save').addEventListener('click', async () => {
     $('#d-save-status').textContent = 'Saving…';
     await api('/leads/' + id, {
@@ -323,10 +374,11 @@ async function openLead(id) {
       body: JSON.stringify({
         service: $('#d-service').value,
         service_date: $('#d-date').value || null,
+        party_size: $('#d-party').value || null,
         paid: $('#d-paid').checked,
         booking_confirmed: $('#d-confirmed').checked,
-        price: $('#d-price').value || 0,
-        notes: $('#d-notes').value
+        notes: $('#d-notes').value,
+        services: collectServices()
       })
     });
     openLead(id);
