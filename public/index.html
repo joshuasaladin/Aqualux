@@ -25,43 +25,44 @@
   <header class="topbar">
     <div class="brand"><span class="brand-drop">💧</span> Aqualux <span class="brand-sub">Concierge CRM</span></div>
     <nav>
-      <button class="nav-btn active" data-view="dashboard">Dashboard</button>
-      <button class="nav-btn" data-view="requests">Requests</button>
+      <button class="nav-btn active" data-view="leads">Leads</button>
+      <button class="nav-btn" data-view="confirmed">Confirmed</button>
+      <button class="nav-btn" data-view="calendar">Calendar</button>
       <button class="nav-btn" data-view="clients">Clients</button>
+      <button class="nav-btn" data-view="settings">Settings <span id="gmail-dot" class="dot dot-off" title="Gmail not connected"></span></button>
     </nav>
-    <button class="btn btn-primary" id="btn-new-request">+ New request</button>
+    <button class="btn btn-primary" id="btn-new-lead">+ New lead</button>
   </header>
 
   <main>
-    <!-- ============================ DASHBOARD ============================ -->
-    <section id="view-dashboard" class="view">
+    <!-- ============================== LEADS ============================== -->
+    <section id="view-leads" class="view">
       <div class="stat-grid" id="stat-grid"></div>
-      <h2>Recently updated</h2>
-      <div id="dash-recent" class="card-list"></div>
+      <div class="filters">
+        <input type="search" id="lead-search" placeholder="Search name, email, service…">
+        <button class="btn" id="btn-sync">⟳ Sync Gmail</button>
+      </div>
+      <div id="lead-list" class="card-list"></div>
     </section>
 
-    <!-- ============================ REQUESTS ============================= -->
-    <section id="view-requests" class="view hidden">
-      <div class="filters">
-        <input type="search" id="req-search" placeholder="Search name, email, service…">
-        <select id="req-status">
-          <option value="">All statuses</option>
-          <option value="new">New</option>
-          <option value="contacted">Contacted</option>
-          <option value="quoted">Quoted</option>
-          <option value="in_progress">In progress</option>
-          <option value="completed">Completed</option>
-          <option value="cancelled">Cancelled</option>
-        </select>
-        <select id="req-payment">
-          <option value="">All payments</option>
-          <option value="unpaid">Unpaid</option>
-          <option value="deposit_paid">Deposit paid</option>
-          <option value="paid">Paid in full</option>
-          <option value="refunded">Refunded</option>
-        </select>
+    <!-- ============================ CONFIRMED ============================ -->
+    <section id="view-confirmed" class="view hidden">
+      <h2>Confirmed bookings</h2>
+      <div id="confirmed-list" class="card-list"></div>
+    </section>
+
+    <!-- ============================ CALENDAR ============================= -->
+    <section id="view-calendar" class="view hidden">
+      <div class="cal-header">
+        <button class="btn" id="cal-prev">‹</button>
+        <h2 id="cal-title"></h2>
+        <button class="btn" id="cal-next">›</button>
       </div>
-      <div id="req-list" class="card-list"></div>
+      <div class="cal-grid cal-dow">
+        <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
+      </div>
+      <div class="cal-grid" id="cal-grid"></div>
+      <p class="cal-hint">Shows bookings that are marked <b>Confirmed</b> and have a service date.</p>
     </section>
 
     <!-- ============================ CLIENTS ============================== -->
@@ -71,38 +72,41 @@
       </div>
       <div id="client-list" class="card-list"></div>
     </section>
+
+    <!-- ============================ SETTINGS ============================= -->
+    <section id="view-settings" class="view hidden">
+      <h2>Gmail connection</h2>
+      <div class="panel" id="gmail-panel"></div>
+    </section>
   </main>
 </div>
 
-<!-- ======================= REQUEST DETAIL DRAWER ======================== -->
+<!-- ========================= LEAD DETAIL DRAWER ========================= -->
 <div id="drawer-backdrop" class="drawer-backdrop hidden"></div>
 <aside id="drawer" class="drawer hidden">
   <div id="drawer-content"></div>
 </aside>
 
-<!-- ========================= NEW REQUEST MODAL ========================== -->
+<!-- =========================== NEW LEAD MODAL =========================== -->
 <div id="modal-backdrop" class="modal-backdrop hidden">
   <div class="modal">
-    <h2>New service request</h2>
-    <form id="new-request-form">
+    <h2>New lead</h2>
+    <form id="new-lead-form">
       <div class="form-row">
         <label>Client name *<input name="name" required placeholder="Jane Smith"></label>
         <label>Email *<input name="email" type="email" required placeholder="jane@example.com"></label>
       </div>
       <div class="form-row">
         <label>Phone<input name="phone" placeholder="+297 …"></label>
-        <label>Service *<input name="service" required placeholder="Yacht charter, private chef…"></label>
+        <label>Service<input name="service" placeholder="Yacht charter, private chef…"></label>
       </div>
-      <label>Details<textarea name="details" rows="3" placeholder="What did they ask for?"></textarea></label>
       <div class="form-row">
-        <label>Quoted amount<input name="quoted_amount" type="number" min="0" step="0.01" placeholder="0.00"></label>
-        <label>Currency
-          <select name="currency"><option>USD</option><option>AWG</option><option>EUR</option></select>
-        </label>
+        <label>Service date<input name="service_date" type="date"></label>
+        <label>Price<input name="price" type="number" min="0" step="0.01" placeholder="0.00"></label>
       </div>
       <div class="modal-actions">
         <button type="button" class="btn" id="modal-cancel">Cancel</button>
-        <button type="submit" class="btn btn-primary">Create request</button>
+        <button type="submit" class="btn btn-primary">Create lead</button>
       </div>
     </form>
   </div>

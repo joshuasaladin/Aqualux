@@ -2,19 +2,10 @@
 
 const $ = (sel) => document.querySelector(sel);
 
-const STATUS_LABELS = {
-  new: 'New', contacted: 'Contacted', quoted: 'Quoted',
-  in_progress: 'In progress', completed: 'Completed', cancelled: 'Cancelled'
-};
-const PAYMENT_LABELS = {
-  unpaid: 'Unpaid', deposit_paid: 'Deposit paid', paid: 'Paid in full', refunded: 'Refunded'
-};
-const ACTIVITY_LABELS = {
-  note: '📝 Note', email_in: '📩 Email received', email_out: '📤 Email sent',
-  call: '📞 Call', status: '🔁 Status change', payment: '💳 Payment', created: '✨ Created'
-};
+const STATUS_LABELS = { new_lead: 'New Lead', responded: 'Responded', new_mail: 'New Mail' };
 
 let token = localStorage.getItem('aqualux_token') || '';
+let gmailStatus = null;
 
 async function api(path, options = {}) {
   const res = await fetch('/api' + path, {
@@ -39,14 +30,11 @@ function esc(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-function money(amount, currency = 'USD') {
-  const n = Number(amount) || 0;
-  return `${currency === 'AWG' ? 'ƒ' : currency === 'EUR' ? '€' : '$'}${n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
-}
+const money = (n) => '$' + (Number(n) || 0).toLocaleString('en-US', { maximumFractionDigits: 2 });
 
 function timeAgo(iso) {
   if (!iso) return '';
-  const then = new Date(iso.replace(' ', 'T') + (iso.includes('Z') ? '' : 'Z'));
+  const then = new Date(iso.includes('T') ? iso : iso.replace(' ', 'T') + 'Z');
   const mins = Math.floor((Date.now() - then.getTime()) / 60000);
   if (mins < 1) return 'just now';
   if (mins < 60) return `${mins}m ago`;
@@ -57,14 +45,25 @@ function timeAgo(iso) {
   return then.toLocaleDateString();
 }
 
-function fullDate(iso) {
+function fmtDateTime(iso) {
   if (!iso) return '';
-  const d = new Date(iso.replace(' ', 'T') + (iso.includes('Z') ? '' : 'Z'));
+  const d = new Date(iso.includes('T') ? iso : iso.replace(' ', 'T') + 'Z');
   return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
+function svcDateBadge(dateStr) {
+  if (!dateStr) return `<span class="svc-date none">no date</span>`;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const d = new Date(dateStr + 'T00:00:00');
+  const days = Math.round((d - today) / 86400000);
+  const label = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const rel = days === 0 ? 'today' : days === 1 ? 'tomorrow' : days > 1 ? `in ${days}d` : `${-days}d ago`;
+  return `<span class="svc-date ${days >= 0 && days <= 3 ? 'soon' : ''}">📅 ${label} · ${rel}</span>`;
+}
+
 const statusBadge = (s) => `<span class="badge st-${s}">${STATUS_LABELS[s] || s}</span>`;
-const payBadge = (p) => `<span class="badge pay-${p}">${PAYMENT_LABELS[p] || p}</span>`;
+const payBadge = (paid) => `<span class="badge pay-${paid ? 'paid' : 'unpaid'}">${paid ? 'Paid' : 'Unpaid'}</span>`;
+const bookBadge = (b) => `<span class="badge bk-${b ? 'yes' : 'no'}">${b ? 'Confirmed ✓' : 'Not confirmed'}</span>`;
 
 /* ------------------------------------------------------------- login ---- */
 function showLogin() {
@@ -83,14 +82,14 @@ $('#login-form').addEventListener('submit', async (e) => {
     localStorage.setItem('aqualux_token', token);
     $('#login-screen').classList.add('hidden');
     $('#app').classList.remove('hidden');
-    showView('dashboard');
+    boot();
   } catch {
     $('#login-error').textContent = 'Wrong password — try again.';
   }
 });
 
 /* -------------------------------------------------------------- views --- */
-let currentView = 'dashboard';
+let currentView = 'leads';
 
 function showView(name) {
   currentView = name;
@@ -98,71 +97,126 @@ function showView(name) {
   $('#view-' + name).classList.remove('hidden');
   document.querySelectorAll('.nav-btn').forEach((b) =>
     b.classList.toggle('active', b.dataset.view === name));
-  if (name === 'dashboard') loadDashboard();
-  if (name === 'requests') loadRequests();
+  if (name === 'leads') loadLeads();
+  if (name === 'confirmed') loadConfirmed();
+  if (name === 'calendar') renderCalendar();
   if (name === 'clients') loadClients();
+  if (name === 'settings') loadSettings();
 }
 
 document.querySelectorAll('.nav-btn').forEach((b) =>
   b.addEventListener('click', () => showView(b.dataset.view)));
 
-/* ---------------------------------------------------------- dashboard --- */
-async function loadDashboard() {
-  const d = await api('/dashboard');
-  $('#stat-grid').innerHTML = `
-    <div class="stat"><div class="num">${d.open}</div><div class="label">Open requests</div></div>
-    <div class="stat"><div class="num">${d.by_status.new || 0}</div><div class="label">New — need reply</div></div>
-    <div class="stat"><div class="num amber">${d.awaiting_payment}</div><div class="label">Awaiting payment</div></div>
-    <div class="stat"><div class="num green">${money(d.collected)}</div><div class="label">Collected</div></div>
-    <div class="stat"><div class="num gold">${money(d.outstanding)}</div><div class="label">Outstanding</div></div>
-    <div class="stat"><div class="num">${d.clients}</div><div class="label">Clients</div></div>`;
-  $('#dash-recent').innerHTML = d.recent.length
-    ? d.recent.map(requestCard).join('')
-    : `<div class="empty">No requests yet. Click “+ New request” to add your first one.</div>`;
-  bindCards('#dash-recent');
-}
+function refreshCurrentView() { showView(currentView); }
 
-/* ----------------------------------------------------------- requests --- */
-function requestCard(r) {
+/* -------------------------------------------------------------- leads --- */
+function leadCard(l) {
+  const done = l.paid && l.booking_confirmed;
   return `
-  <div class="card" data-request="${r.id}">
+  <div class="card ${done ? 'done' : ''}" data-lead="${l.id}">
     <div class="card-top">
-      <span class="card-title">${esc(r.client_name)}</span>
-      ${statusBadge(r.status)} ${payBadge(r.payment_status)}
+      <span class="card-title">${esc(l.client_name)}</span>
+      ${statusBadge(l.status)} ${payBadge(l.paid)} ${bookBadge(l.booking_confirmed)}
       <span class="card-right">
-        ${r.quoted_amount ? `<span class="card-amount">${money(r.quoted_amount, r.currency)}</span>` : ''}
-        <span class="card-sub">${timeAgo(r.updated_at)}</span>
+        ${l.price ? `<span class="card-amount">${money(l.price)}</span>` : ''}
+        ${svcDateBadge(l.service_date)}
       </span>
     </div>
-    <div class="card-sub">✉️ ${esc(r.client_email)} · ${esc(r.service)}</div>
+    <div class="card-sub">✉️ ${esc(l.client_email)} · ${esc(l.service || l.subject || '—')}
+      ${l.last_msg_at ? ` · last email ${timeAgo(l.last_msg_at)}` : ''}</div>
   </div>`;
 }
 
-function bindCards(container) {
-  document.querySelectorAll(container + ' [data-request]').forEach((el) =>
-    el.addEventListener('click', () => openRequest(el.dataset.request)));
-  document.querySelectorAll(container + ' [data-client]').forEach((el) =>
-    el.addEventListener('click', () => openClient(el.dataset.client)));
+function bindLeadCards(container) {
+  document.querySelectorAll(container + ' [data-lead]').forEach((el) =>
+    el.addEventListener('click', () => openLead(el.dataset.lead)));
 }
 
-let reqTimer;
-async function loadRequests() {
-  const params = new URLSearchParams();
-  if ($('#req-search').value) params.set('q', $('#req-search').value);
-  if ($('#req-status').value) params.set('status', $('#req-status').value);
-  if ($('#req-payment').value) params.set('payment_status', $('#req-payment').value);
-  const rows = await api('/requests?' + params);
-  $('#req-list').innerHTML = rows.length
-    ? rows.map(requestCard).join('')
-    : `<div class="empty">No requests match.</div>`;
-  bindCards('#req-list');
+let leadTimer;
+async function loadLeads() {
+  const [summary, rows] = await Promise.all([
+    api('/leads/summary'),
+    api('/leads' + ($('#lead-search').value ? '?q=' + encodeURIComponent($('#lead-search').value) : ''))
+  ]);
+  $('#stat-grid').innerHTML = `
+    <div class="stat"><div class="num green">${summary.needs_reply || 0}</div><div class="label">Waiting on your reply</div></div>
+    <div class="stat"><div class="num amber">${summary.confirmed_unpaid || 0}</div><div class="label">Confirmed but unpaid</div></div>
+    <div class="stat"><div class="num">${summary.upcoming || 0}</div><div class="label">Upcoming bookings</div></div>
+    <div class="stat"><div class="num">${summary.total || 0}</div><div class="label">Total leads</div></div>`;
+  $('#lead-list').innerHTML = rows.length
+    ? rows.map(leadCard).join('')
+    : `<div class="empty">No leads yet. Connect Gmail in Settings — new emails will appear here automatically.</div>`;
+  bindLeadCards('#lead-list');
 }
 
-$('#req-search').addEventListener('input', () => {
-  clearTimeout(reqTimer); reqTimer = setTimeout(loadRequests, 250);
+$('#lead-search').addEventListener('input', () => {
+  clearTimeout(leadTimer); leadTimer = setTimeout(loadLeads, 250);
 });
-$('#req-status').addEventListener('change', loadRequests);
-$('#req-payment').addEventListener('change', loadRequests);
+
+$('#btn-sync').addEventListener('click', async () => {
+  const btn = $('#btn-sync');
+  btn.disabled = true; btn.textContent = '⟳ Syncing…';
+  try {
+    await api('/gmail/sync', { method: 'POST' });
+    await loadLeads();
+  } catch (err) {
+    alert('Sync failed: ' + err.message);
+  } finally {
+    btn.disabled = false; btn.textContent = '⟳ Sync Gmail';
+  }
+});
+
+/* ---------------------------------------------------------- confirmed --- */
+async function loadConfirmed() {
+  const rows = await api('/leads?tab=confirmed');
+  $('#confirmed-list').innerHTML = rows.length
+    ? rows.map(leadCard).join('')
+    : `<div class="empty">No confirmed bookings yet. Open a lead and switch on “Booking confirmed”.</div>`;
+  bindLeadCards('#confirmed-list');
+}
+
+/* ------------------------------------------------------------ calendar --- */
+let calYear, calMonth; // calMonth: 0-11
+
+async function renderCalendar() {
+  if (calYear === undefined) {
+    const now = new Date();
+    calYear = now.getFullYear(); calMonth = now.getMonth();
+  }
+  const first = new Date(calYear, calMonth, 1);
+  const last = new Date(calYear, calMonth + 1, 0);
+  const pad = (n) => String(n).padStart(2, '0');
+  const from = `${calYear}-${pad(calMonth + 1)}-01`;
+  const to = `${calYear}-${pad(calMonth + 1)}-${pad(last.getDate())}`;
+  const events = await api(`/calendar?from=${from}&to=${to}`);
+  const byDay = {};
+  for (const e of events) (byDay[e.service_date] ||= []).push(e);
+
+  $('#cal-title').textContent = first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  const todayStr = new Date().toISOString().slice(0, 10);
+  let cells = '';
+  for (let i = 0; i < first.getDay(); i++) cells += `<div class="cal-cell other"></div>`;
+  for (let d = 1; d <= last.getDate(); d++) {
+    const dateStr = `${calYear}-${pad(calMonth + 1)}-${pad(d)}`;
+    const evts = (byDay[dateStr] || []).map((e) => `
+      <div class="cal-evt ${e.paid ? '' : 'unpaid'}" data-lead="${e.id}"
+           title="${esc(e.client_name)} — ${esc(e.service)}${e.paid ? '' : ' (unpaid)'}">
+        ${esc(e.client_name.split(' ')[0])}: ${esc(e.service)}
+      </div>`).join('');
+    cells += `<div class="cal-cell ${dateStr === todayStr ? 'today' : ''}"><div class="d">${d}</div>${evts}</div>`;
+  }
+  $('#cal-grid').innerHTML = cells;
+  bindLeadCards('#cal-grid');
+}
+
+$('#cal-prev').addEventListener('click', () => {
+  calMonth--; if (calMonth < 0) { calMonth = 11; calYear--; }
+  renderCalendar();
+});
+$('#cal-next').addEventListener('click', () => {
+  calMonth++; if (calMonth > 11) { calMonth = 0; calYear++; }
+  renderCalendar();
+});
 
 /* ------------------------------------------------------------ clients --- */
 async function loadClients() {
@@ -175,13 +229,14 @@ async function loadClients() {
           <span class="card-title">${esc(c.name)}</span>
           <span class="card-right">
             <span class="card-amount">${money(c.total_paid)} paid</span>
-            <span class="card-sub">${c.request_count} request${c.request_count === 1 ? '' : 's'}</span>
+            <span class="card-sub">${c.lead_count} lead${c.lead_count === 1 ? '' : 's'}</span>
           </span>
         </div>
         <div class="card-sub">✉️ ${esc(c.email)}${c.phone ? ' · 📞 ' + esc(c.phone) : ''}</div>
       </div>`).join('')
     : `<div class="empty">No clients yet.</div>`;
-  bindCards('#client-list');
+  document.querySelectorAll('#client-list [data-client]').forEach((el) =>
+    el.addEventListener('click', () => openClient(el.dataset.client)));
 }
 
 let clientTimer;
@@ -189,7 +244,7 @@ $('#client-search').addEventListener('input', () => {
   clearTimeout(clientTimer); clientTimer = setTimeout(loadClients, 250);
 });
 
-/* ------------------------------------------------------ request drawer --- */
+/* --------------------------------------------------------- lead drawer --- */
 function closeDrawer() {
   $('#drawer').classList.add('hidden');
   $('#drawer-backdrop').classList.add('hidden');
@@ -197,117 +252,119 @@ function closeDrawer() {
 $('#drawer-backdrop').addEventListener('click', closeDrawer);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
 
-async function openRequest(id) {
-  const r = await api('/requests/' + id);
+async function openLead(id) {
+  const l = await api('/leads/' + id);
+  const canEmail = gmailStatus?.connected;
   $('#drawer-content').innerHTML = `
   <div class="drawer-head">
     <button class="close" id="drawer-close">×</button>
-    <h2>${esc(r.service)}</h2>
+    <h2>${esc(l.client_name)} ${statusBadge(l.status)}</h2>
     <div class="client-line">
-      ${esc(r.client_name)} · <a href="mailto:${esc(r.client_email)}">${esc(r.client_email)}</a>
-      ${r.client_phone ? ' · ' + esc(r.client_phone) : ''}
+      <a href="mailto:${esc(l.client_email)}">${esc(l.client_email)}</a>
+      ${l.client_phone ? ' · ' + esc(l.client_phone) : ''}
+      ${l.subject ? ' · ' + esc(l.subject) : ''}
     </div>
   </div>
   <div class="drawer-body">
+
     <div class="panel">
-      <h3>Status &amp; payment</h3>
+      <h3>Booking</h3>
       <div class="form-row">
-        <label>Status
-          <select id="d-status">${Object.entries(STATUS_LABELS).map(([v, l]) =>
-            `<option value="${v}" ${v === r.status ? 'selected' : ''}>${l}</option>`).join('')}
-          </select>
+        <label>Service requested<input id="d-service" value="${esc(l.service)}" placeholder="e.g. Yacht charter"></label>
+        <label>Service date<input id="d-date" type="date" value="${l.service_date || ''}"></label>
+      </div>
+      <div class="toggle-row">
+        <label class="toggle ${l.paid ? 'on-paid' : ''}">
+          <input type="checkbox" id="d-paid" ${l.paid ? 'checked' : ''}> Paid ${l.paid ? '✓' : ''}
         </label>
-        <label>Payment
-          <select id="d-payment">${Object.entries(PAYMENT_LABELS).map(([v, l]) =>
-            `<option value="${v}" ${v === r.payment_status ? 'selected' : ''}>${l}</option>`).join('')}
-          </select>
+        <label class="toggle ${l.booking_confirmed ? 'on-confirmed' : ''}">
+          <input type="checkbox" id="d-confirmed" ${l.booking_confirmed ? 'checked' : ''}> Booking confirmed ${l.booking_confirmed ? '✓' : ''}
         </label>
       </div>
       <div class="form-row">
-        <label>Quoted (${esc(r.currency)})
-          <input id="d-quoted" type="number" min="0" step="0.01" value="${r.quoted_amount || ''}" placeholder="0.00">
-        </label>
-        <label>Received (${esc(r.currency)})
-          <input id="d-paid" type="number" min="0" step="0.01" value="${r.paid_amount || ''}" placeholder="0.00">
-        </label>
+        <label>Price<input id="d-price" type="number" min="0" step="0.01" value="${l.price || ''}" placeholder="0.00"></label>
+        <label>Notes<input id="d-notes" value="${esc(l.notes)}" placeholder="Internal notes…"></label>
       </div>
-      <button class="btn btn-primary btn-sm" id="d-save">Save changes</button>
+      <button class="btn btn-primary btn-sm" id="d-save">Save</button>
+      <span class="send-status" id="d-save-status"></span>
     </div>
 
     <div class="panel">
-      <h3>Request details</h3>
-      <div class="kv"><span class="k">Received</span><span>${fullDate(r.created_at)}</span></div>
-      <div class="kv"><span class="k">Last update</span><span>${fullDate(r.updated_at)}</span></div>
-      ${r.details ? `<p style="margin-top:8px; font-size:.9rem; white-space:pre-wrap">${esc(r.details)}</p>` : ''}
-    </div>
-
-    <div class="panel">
-      <h3>Add to timeline</h3>
-      <form class="activity-form" id="d-activity-form">
-        <div class="row">
-          <select id="d-activity-type">
-            <option value="email_out">📤 Email sent</option>
-            <option value="email_in">📩 Email received</option>
-            <option value="note">📝 Note</option>
-            <option value="call">📞 Call</option>
-          </select>
-          <button type="submit" class="btn btn-primary btn-sm">Add</button>
+      <h3>Conversation</h3>
+      <div class="thread">
+        ${l.messages.length ? l.messages.map((m) => `
+          <div class="msg ${m.direction}">
+            <div class="m-meta">${m.direction === 'in' ? esc(l.client_name) : 'You'} · ${fmtDateTime(m.sent_at)}</div>
+            ${esc(m.body)}
+          </div>`).join('') : '<div class="empty">No emails on this lead yet.</div>'}
+      </div>
+      <div class="reply-box">
+        <textarea id="d-reply" placeholder="Write your reply — it sends from your Gmail…" ${canEmail ? '' : 'disabled'}></textarea>
+        <div class="reply-actions">
+          <button class="btn btn-primary" id="d-send" ${canEmail ? '' : 'disabled'}>Send reply ✉️</button>
+          <span class="send-status" id="d-send-status">${canEmail ? '' :
+            'Connect Gmail in <a href="#" id="goto-settings">Settings</a> to send emails from here.'}</span>
         </div>
-        <textarea id="d-activity-body" rows="2" placeholder="What happened? e.g. ‘Sent quote for the catamaran option’" required></textarea>
-      </form>
+      </div>
     </div>
 
-    <div class="panel">
-      <h3>Timeline</h3>
-      <ul class="timeline">
-        ${r.activities.map((a) => `
-          <li class="t-${a.type}">
-            <div class="t-meta">${ACTIVITY_LABELS[a.type] || a.type} · ${fullDate(a.created_at)}</div>
-            <div class="t-body">${esc(a.body)}</div>
-          </li>`).join('')}
-      </ul>
-    </div>
-
-    <button class="btn btn-danger btn-sm" id="d-delete">Delete request</button>
+    <button class="btn btn-danger btn-sm" id="d-delete">Delete lead</button>
   </div>`;
 
   $('#drawer-close').addEventListener('click', closeDrawer);
+  $('#goto-settings')?.addEventListener('click', (e) => {
+    e.preventDefault(); closeDrawer(); showView('settings');
+  });
 
   $('#d-save').addEventListener('click', async () => {
-    await api('/requests/' + id, {
+    $('#d-save-status').textContent = 'Saving…';
+    await api('/leads/' + id, {
       method: 'PATCH',
       body: JSON.stringify({
-        status: $('#d-status').value,
-        payment_status: $('#d-payment').value,
-        quoted_amount: $('#d-quoted').value || 0,
-        paid_amount: $('#d-paid').value || 0
+        service: $('#d-service').value,
+        service_date: $('#d-date').value || null,
+        paid: $('#d-paid').checked,
+        booking_confirmed: $('#d-confirmed').checked,
+        price: $('#d-price').value || 0,
+        notes: $('#d-notes').value
       })
     });
-    openRequest(id);
+    openLead(id);
     refreshCurrentView();
   });
 
-  $('#d-activity-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    await api(`/requests/${id}/activities`, {
-      method: 'POST',
-      body: JSON.stringify({ type: $('#d-activity-type').value, body: $('#d-activity-body').value })
-    });
-    openRequest(id);
+  $('#d-send').addEventListener('click', async () => {
+    const body = $('#d-reply').value.trim();
+    if (!body) return;
+    const st = $('#d-send-status');
+    $('#d-send').disabled = true;
+    st.classList.remove('err');
+    st.textContent = 'Sending…';
+    try {
+      await api(`/leads/${id}/reply`, { method: 'POST', body: JSON.stringify({ body }) });
+      openLead(id);
+      refreshCurrentView();
+    } catch (err) {
+      st.classList.add('err');
+      st.textContent = 'Failed: ' + err.message;
+      $('#d-send').disabled = false;
+    }
   });
 
   $('#d-delete').addEventListener('click', async () => {
-    if (!confirm('Delete this request and its timeline? This cannot be undone.')) return;
-    await api('/requests/' + id, { method: 'DELETE' });
+    if (!confirm('Delete this lead and its conversation from the CRM? (Emails stay in Gmail.)')) return;
+    await api('/leads/' + id, { method: 'DELETE' });
     closeDrawer();
     refreshCurrentView();
   });
 
   $('#drawer').classList.remove('hidden');
   $('#drawer-backdrop').classList.remove('hidden');
+  const thread = $('#drawer-content .thread');
+  if (thread) thread.scrollTop = thread.scrollHeight;
 }
 
-/* ------------------------------------------------------ client drawer --- */
+/* ------------------------------------------------------- client drawer --- */
 async function openClient(id) {
   const c = await api('/clients/' + id);
   $('#drawer-content').innerHTML = `
@@ -325,73 +382,152 @@ async function openClient(id) {
       <button class="btn btn-primary btn-sm" id="c-save" style="margin-top:8px">Save notes</button>
     </div>
     <div class="panel">
-      <h3>Requests (${c.requests.length})</h3>
+      <h3>Leads (${c.leads.length})</h3>
       <div class="card-list">
-        ${c.requests.length ? c.requests.map((r) => `
-          <div class="card" data-request="${r.id}">
+        ${c.leads.length ? c.leads.map((l) => `
+          <div class="card" data-lead="${l.id}">
             <div class="card-top">
-              <span class="card-title">${esc(r.service)}</span>
-              ${statusBadge(r.status)} ${payBadge(r.payment_status)}
-              <span class="card-right">
-                ${r.quoted_amount ? `<span class="card-amount">${money(r.quoted_amount, r.currency)}</span>` : ''}
-              </span>
+              <span class="card-title">${esc(l.service || l.subject || '—')}</span>
+              ${statusBadge(l.status)} ${payBadge(l.paid)} ${bookBadge(l.booking_confirmed)}
+              <span class="card-right">${svcDateBadge(l.service_date)}</span>
             </div>
-            <div class="card-sub">${timeAgo(r.updated_at)}</div>
-          </div>`).join('') : '<div class="empty">No requests yet.</div>'}
+          </div>`).join('') : '<div class="empty">No leads yet.</div>'}
       </div>
     </div>
   </div>`;
 
   $('#drawer-close').addEventListener('click', closeDrawer);
   $('#c-save').addEventListener('click', async () => {
-    await api('/clients/' + id, {
-      method: 'PATCH',
-      body: JSON.stringify({ notes: $('#c-notes').value })
-    });
+    await api('/clients/' + id, { method: 'PATCH', body: JSON.stringify({ notes: $('#c-notes').value }) });
     $('#c-save').textContent = 'Saved ✓';
     setTimeout(() => { $('#c-save').textContent = 'Save notes'; }, 1500);
   });
-  document.querySelectorAll('#drawer-content [data-request]').forEach((el) =>
-    el.addEventListener('click', () => openRequest(el.dataset.request)));
+  document.querySelectorAll('#drawer-content [data-lead]').forEach((el) =>
+    el.addEventListener('click', () => openLead(el.dataset.lead)));
 
   $('#drawer').classList.remove('hidden');
   $('#drawer-backdrop').classList.remove('hidden');
 }
 
-function refreshCurrentView() { showView(currentView); }
+/* ------------------------------------------------------------ settings --- */
+async function loadSettings() {
+  const s = await api('/gmail/status');
+  gmailStatus = s;
+  updateGmailDot();
+  const panel = $('#gmail-panel');
 
-/* -------------------------------------------------- new request modal --- */
-$('#btn-new-request').addEventListener('click', () => {
+  if (s.connected) {
+    panel.innerHTML = `
+      <div class="gmail-connected">
+        <span class="dot dot-on"></span>
+        <span class="who">Connected as ${esc(s.email)}</span>
+        <button class="btn btn-sm" id="s-sync">⟳ Sync now</button>
+        <button class="btn btn-sm" id="s-import">Import last 7 days</button>
+        <button class="btn btn-sm btn-danger" id="s-disconnect">Disconnect</button>
+      </div>
+      <p class="reply-hint">New incoming emails become leads automatically (checked every few minutes).
+        Replies you send here go out through your Gmail and land in your Sent folder.
+        ${s.last_sync ? `Last sync: ${fmtDateTime(s.last_sync)}.` : ''}</p>
+      ${s.last_sync_error ? `<div class="sync-err">Last sync error: ${esc(s.last_sync_error)}</div>` : ''}`;
+    $('#s-sync').addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      try { await api('/gmail/sync', { method: 'POST' }); loadSettings(); }
+      catch (err) { alert('Sync failed: ' + err.message); e.target.disabled = false; }
+    });
+    $('#s-import').addEventListener('click', async (e) => {
+      if (!confirm('Import emails from the last 7 days as leads?')) return;
+      e.target.disabled = true;
+      try { await api('/gmail/import-recent', { method: 'POST', body: JSON.stringify({ days: 7 }) }); loadSettings(); }
+      catch (err) { alert('Import failed: ' + err.message); e.target.disabled = false; }
+    });
+    $('#s-disconnect').addEventListener('click', async () => {
+      if (!confirm('Disconnect Gmail? Existing leads stay; new emails stop syncing.')) return;
+      await api('/gmail/disconnect', { method: 'POST' });
+      loadSettings();
+    });
+    return;
+  }
+
+  panel.innerHTML = `
+    <p class="reply-hint" style="margin-bottom:10px">
+      One-time setup (~5 minutes) so the CRM can read incoming inquiries and send replies from your Gmail:</p>
+    <ol class="steps">
+      <li>Go to <a href="https://console.cloud.google.com/apis/credentials" target="_blank">Google Cloud Console → Credentials</a> (create a free project if asked).</li>
+      <li>Enable the <a href="https://console.cloud.google.com/apis/library/gmail.googleapis.com" target="_blank">Gmail API</a> for the project.</li>
+      <li>Configure the OAuth consent screen (External), and add <b>your own Gmail address</b> as a test user.</li>
+      <li>Create an <b>OAuth client ID</b> → type <b>Web application</b> → add this exact redirect URI:<br>
+        <code>${esc(s.redirect_uri)}</code></li>
+      <li>Copy the Client ID and Client Secret below, then click Connect.</li>
+    </ol>
+    <div class="form-row">
+      <label>Client ID<input id="s-client-id" placeholder="xxxxxxxx.apps.googleusercontent.com"></label>
+      <label>Client Secret<input id="s-client-secret" type="password" placeholder="GOCSPX-…"></label>
+    </div>
+    <button class="btn btn-primary" id="s-connect">Connect Gmail →</button>
+    <span class="send-status" id="s-status">${s.has_credentials ? 'Credentials saved — click Connect to authorize.' : ''}</span>`;
+
+  $('#s-connect').addEventListener('click', async () => {
+    const st = $('#s-status');
+    try {
+      const cid = $('#s-client-id').value.trim();
+      const sec = $('#s-client-secret').value.trim();
+      if (cid && sec) {
+        await api('/gmail/credentials', { method: 'POST', body: JSON.stringify({ client_id: cid, client_secret: sec }) });
+      }
+      const { url } = await api('/gmail/auth-url');
+      window.location.href = url;
+    } catch (err) {
+      st.classList.add('err');
+      st.textContent = err.message;
+    }
+  });
+}
+
+function updateGmailDot() {
+  const dot = $('#gmail-dot');
+  const on = gmailStatus?.connected;
+  dot.className = 'dot ' + (on ? 'dot-on' : 'dot-off');
+  dot.title = on ? `Gmail connected: ${gmailStatus.email}` : 'Gmail not connected';
+}
+
+/* --------------------------------------------------- new lead modal ------ */
+$('#btn-new-lead').addEventListener('click', () => {
   $('#modal-backdrop').classList.remove('hidden');
-  $('#new-request-form').reset();
-  $('#new-request-form [name=name]').focus();
+  $('#new-lead-form').reset();
+  $('#new-lead-form [name=name]').focus();
 });
 $('#modal-cancel').addEventListener('click', () => $('#modal-backdrop').classList.add('hidden'));
 $('#modal-backdrop').addEventListener('click', (e) => {
   if (e.target === $('#modal-backdrop')) $('#modal-backdrop').classList.add('hidden');
 });
 
-$('#new-request-form').addEventListener('submit', async (e) => {
+$('#new-lead-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const fd = new FormData(e.target);
-  const body = Object.fromEntries(fd.entries());
-  const created = await api('/requests', { method: 'POST', body: JSON.stringify(body) });
+  const body = Object.fromEntries(new FormData(e.target).entries());
+  const created = await api('/leads', { method: 'POST', body: JSON.stringify(body) });
   $('#modal-backdrop').classList.add('hidden');
   refreshCurrentView();
-  openRequest(created.id);
+  openLead(created.id);
 });
 
 /* --------------------------------------------------------------- boot --- */
-(async function boot() {
+async function boot() {
+  gmailStatus = await api('/gmail/status').catch(() => null);
+  updateGmailDot();
+  showView('leads');
+  // light auto-refresh so new emails appear without reloading
+  setInterval(() => {
+    if (currentView === 'leads' && $('#drawer').classList.contains('hidden')) loadLeads();
+  }, 60000);
+}
+
+(async function init() {
   try {
-    await api('/dashboard');
+    await api('/leads/summary');
     $('#app').classList.remove('hidden');
-    showView('dashboard');
+    boot();
   } catch (err) {
     if (err.message === 'Unauthorized') showLogin();
-    else {
-      $('#app').classList.remove('hidden');
-      showView('dashboard');
-    }
+    else { $('#app').classList.remove('hidden'); boot(); }
   }
 })();

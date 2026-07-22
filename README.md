@@ -1,53 +1,80 @@
 # Aqualux — Concierge CRM
 
-A simple CRM for **Aqualux concierge services**: track every client who
-requests a service, follow how each inquiry (email) is progressing, and see
-at a glance whether they've paid.
+A Gmail-connected CRM for **Aqualux concierge services**: every email inquiry
+becomes a lead automatically, you answer clients right from the CRM, and each
+lead tracks its service date, payment, and booking confirmation.
 
-## What it does
+## How it works
 
-- **Requests pipeline** — every inquiry moves through
-  `New → Contacted → Quoted → In progress → Completed` (or `Cancelled`),
-  so you always know where each email stands.
-- **Payment tracking** — each request has a payment status
-  (`Unpaid / Deposit paid / Paid in full / Refunded`), a quoted amount, and
-  the amount actually received. The dashboard totals what you've collected
-  and what's still outstanding.
-- **Timeline per request** — log emails sent/received, calls, and notes.
-  Status and payment changes are logged automatically, so each request reads
-  like a story from first email to final payment.
-- **Clients** — every requester becomes a client (deduplicated by email),
-  with their full request history, total paid, and private notes
-  (preferences, VIP status, …).
-- **Dashboard** — open requests, new inquiries needing a reply, requests
-  awaiting payment, money collected and outstanding.
-- **Website intake** — `POST /api/intake` is an open endpoint your concierge
-  website's "request a service" form can submit to; the inquiry appears in
-  the CRM instantly as a **New** request.
+- **Emails become leads.** Connect your Gmail once (Settings tab). New
+  incoming emails are pulled in automatically — sender name + email create
+  the client, the subject line pre-fills the service (editable).
+- **Status follows the conversation:**
+  - 🟢 **New Lead** — a client emailed and you haven't replied yet
+  - 🔴 **Responded** — the last message is yours
+  - 🟢 **New Mail** — the client replied again, ball's in your court
+  The status flips back and forth automatically as the conversation goes on —
+  including when you reply from the Gmail app directly.
+- **Reply from the CRM.** Each lead shows the full conversation as a chat
+  thread with a reply box. Replies send through your Gmail (same thread, and
+  they appear in your Sent folder).
+- **Booking fields on every lead**: service, **service date**, **Paid**
+  toggle, **Booking confirmed** toggle, price, and notes.
+- **Smart ordering**: leads are sorted by service date — soonest on top —
+  except leads that are already **paid AND confirmed**, which sink to the
+  bottom (shown dimmed). Leads without a date come after dated ones.
+- **Confirmed tab** — only bookings marked confirmed.
+- **Calendar tab** — confirmed bookings plotted on their service dates
+  (amber = confirmed but not paid yet).
+- **Clients tab** — everyone who ever wrote in, with total paid and notes.
+- **Website intake** — `POST /api/intake` accepts your website's
+  "request a service" form; submissions appear as New Leads.
 
 ## Quick start
 
 ```bash
 npm install
-npm run dev     # starts with demo data at http://localhost:3000
-npm start       # production: empty database, real data only
+npm run dev     # demo data at http://localhost:3000
+npm start       # production: empty database
 ```
 
-Node.js **22.5+** required (uses the built-in `node:sqlite` — no native deps).
-Data is stored in `data/aqualux.db` (override the folder with `DATA_DIR`).
+Node.js **22.5+** required (uses built-in `node:sqlite`). Data lives in
+`data/aqualux.db` (override the folder with `DATA_DIR`).
 
-### Protecting it with a password
+Protect it with a password:
 
 ```bash
 ADMIN_PASSWORD=your-secret npm start
 ```
 
-When `ADMIN_PASSWORD` is set, the CRM asks for it on first load. The
-`/api/intake` endpoint stays open so the website form keeps working.
+The `/api/intake` endpoint and the Google OAuth callback stay open.
+
+## Connecting Gmail (one-time, ~5 minutes)
+
+The CRM uses Google's official Gmail API — no password sharing, and you can
+revoke access anytime from your Google account.
+
+1. Open [Google Cloud Console → Credentials](https://console.cloud.google.com/apis/credentials)
+   and create a (free) project.
+2. Enable the [Gmail API](https://console.cloud.google.com/apis/library/gmail.googleapis.com).
+3. Configure the **OAuth consent screen** → External → add your own Gmail
+   address as a **test user**.
+4. **Create Credentials → OAuth client ID → Web application**, and add the
+   redirect URI shown in the CRM's Settings tab
+   (`https://your-crm-host/api/gmail/callback`).
+5. Paste the Client ID + Secret into the CRM's Settings tab → **Connect
+   Gmail** → approve the Google screen. Done.
+
+From then on the CRM checks for new mail every ~3 minutes (there's also a
+manual "Sync Gmail" button). Only emails received **after** connecting become
+leads; "Import last 7 days" in Settings reaches further back. Obvious
+no-reply/newsletter senders are skipped.
+
+Credentials can also come from env vars: `GOOGLE_CLIENT_ID`,
+`GOOGLE_CLIENT_SECRET`. Set `BASE_URL` (e.g. `https://aqualux-crm.onrender.com`)
+when deploying behind a proxy.
 
 ## Wiring your website's contact form
-
-Point the form at the intake endpoint:
 
 ```js
 await fetch('https://your-crm-host/api/intake', {
@@ -63,18 +90,19 @@ await fetch('https://your-crm-host/api/intake', {
 });
 ```
 
+Your first reply from the CRM to a form lead starts a real Gmail thread.
+
 ## API overview
 
 | Method & path | Purpose |
 | --- | --- |
-| `POST /api/intake` | Public: create a request from the website form |
-| `GET /api/dashboard` | Stats + recently updated requests |
-| `GET /api/requests` | List/filter (`?status=`, `?payment_status=`, `?q=`) |
-| `POST /api/requests` | Create a request (creates the client if new) |
-| `GET /api/requests/:id` | Request + client + full timeline |
-| `PATCH /api/requests/:id` | Update status, payment, amounts, details |
-| `POST /api/requests/:id/activities` | Log an email / call / note |
-| `DELETE /api/requests/:id` | Delete a request |
-| `GET /api/clients` | List clients with request counts & totals |
-| `GET /api/clients/:id` | Client + their requests |
-| `PATCH /api/clients/:id` | Update client info / notes |
+| `POST /api/intake` | Public: create a lead from the website form |
+| `GET /api/leads` | Sorted list (`?q=` search, `?tab=confirmed`) |
+| `GET /api/leads/summary` | Counters for the header stats |
+| `GET /api/leads/:id` | Lead + client + full email conversation |
+| `PATCH /api/leads/:id` | Update service, date, paid, confirmed, price, notes |
+| `POST /api/leads/:id/reply` | Send an email reply via Gmail |
+| `GET /api/calendar?from=&to=` | Confirmed bookings in a date range |
+| `GET/PATCH /api/clients…` | Client list, details, notes |
+| `GET /api/gmail/status` | Connection state + redirect URI |
+| `POST /api/gmail/sync` | Sync now |
