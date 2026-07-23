@@ -61,6 +61,30 @@ function svcDateBadge(dateStr) {
   return `<span class="svc-date ${days >= 0 && days <= 3 ? 'soon' : ''}">📅 ${label} · ${rel}</span>`;
 }
 
+/**
+ * Email replies carry the whole previous conversation as quoted text
+ * ("On ... wrote:", "> " lines). Each earlier message is already its own
+ * bubble in the thread, so show only the NEW text — with the raw original
+ * available behind a click, just in case.
+ */
+function stripQuoted(body) {
+  const patterns = [
+    /(^|\r?\n)\s*On [\s\S]{0,200}?wrote:\s*(\r?\n|$)/,   // "On <date>, <name> wrote:" (may wrap)
+    /(^|\r?\n)>\s?/,                                     // first "> " quoted line
+    /(^|\r?\n)-{2,}\s*Original Message\s*-{2,}/i,
+    /(^|\r?\n)From:\s[^\n]+\r?\nSent:\s/i,
+    /(^|\r?\n)_{6,}\s*(\r?\n|$)/
+  ];
+  let cut = body.length;
+  for (const re of patterns) {
+    const m = body.match(re);
+    if (m && m.index < cut) cut = m.index;
+  }
+  const text = body.slice(0, cut).trim();
+  if (!text || cut >= body.length) return { text: body, hasQuoted: false };
+  return { text, hasQuoted: true };
+}
+
 const statusBadge = (s) => `<span class="badge st-${s}">${STATUS_LABELS[s] || s}</span>`;
 const payBadge = (paid) => `<span class="badge pay-${paid ? 'paid' : 'unpaid'}">${paid ? 'Paid' : 'Unpaid'}</span>`;
 const bookBadge = (b) => `<span class="badge bk-${b ? 'yes' : 'no'}">${b ? 'Confirmed ✓' : 'Not confirmed'}</span>`;
@@ -377,11 +401,14 @@ async function openLead(id) {
       <div class="thread">
         ${l.messages.length ? l.messages.map((m) => {
           const isFormSubmission = m.body.startsWith('Website form submission');
+          const { text, hasQuoted } = isFormSubmission
+            ? { text: m.body, hasQuoted: false } : stripQuoted(m.body);
           return `
           <div class="msg ${m.direction}">
             ${isFormSubmission ? '' :
               `<div class="m-meta">${m.direction === 'in' ? esc(l.client_name) : 'You'} · ${fmtDateTime(m.sent_at)}</div>`}
-            ${esc(m.body)}
+            <span class="msg-text">${esc(text)}</span>
+            ${hasQuoted ? `<div class="quoted-toggle" data-mid="${m.id}">Show quoted history ⌄</div>` : ''}
           </div>`;
         }).join('') : '<div class="empty">No emails on this lead yet.</div>'}
       </div>
@@ -464,6 +491,18 @@ async function openLead(id) {
     openLead(id);
     refreshCurrentView();
   });
+
+  // --- expand/collapse quoted history in bubbles ---
+  const msgById = Object.fromEntries(l.messages.map((m) => [String(m.id), m]));
+  document.querySelectorAll('#drawer-content .quoted-toggle').forEach((el) =>
+    el.addEventListener('click', () => {
+      const m = msgById[el.dataset.mid];
+      const textEl = el.parentElement.querySelector('.msg-text');
+      const expanded = el.dataset.expanded === '1';
+      textEl.textContent = expanded ? stripQuoted(m.body).text : m.body;
+      el.dataset.expanded = expanded ? '0' : '1';
+      el.textContent = expanded ? 'Show quoted history ⌄' : 'Hide quoted history ⌃';
+    }));
 
   // --- auto-expanding reply box ---
   const replyBox = $('#d-reply');

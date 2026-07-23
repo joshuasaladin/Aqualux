@@ -379,8 +379,10 @@ export async function syncNow() {
     const since = getSetting('gmail_sync_since') || Math.floor(Date.now() / 1000);
     let created = 0, updated = 0, payments = 0;
 
-    // 1. New inbox threads -> new leads
-    const list = await apiGet(`/threads?q=${encodeURIComponent(`in:inbox after:${since}`)}&maxResults=50`);
+    // 1. New threads -> new leads (or merged into the sender's existing
+    //    lead). Searches ALL mail, not just the inbox, so emails that Gmail
+    //    filters auto-label or archive (skip the inbox) are still found.
+    const list = await apiGet(`/threads?q=${encodeURIComponent(`after:${since} -in:spam -in:trash`)}&maxResults=50`);
     for (const t of list.threads || []) {
       if (db.prepare(`SELECT 1 FROM lead_threads WHERE thread_id = ?`).get(t.id)) continue;
       if (db.prepare(`SELECT 1 FROM processed_threads WHERE thread_id = ?`).get(t.id)) continue;
