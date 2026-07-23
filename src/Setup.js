@@ -5,6 +5,24 @@
  * Resources are remembered in Script Properties, so re-running setup() is
  * safe — it only creates what is missing.
  */
+/**
+ * One-time cleanup: deletes the AquaLux/Processed and AquaLux/Needs-Review
+ * Gmail labels left over from an earlier version of this pipeline. Only
+ * removes the label definitions — the emails themselves are untouched.
+ * Safe to run more than once; does nothing once the labels are gone.
+ */
+function removeOldLabels() {
+  ['AquaLux/Processed', 'AquaLux/Needs-Review'].forEach(name => {
+    const label = GmailApp.getUserLabelByName(name);
+    if (label) {
+      label.deleteLabel();
+      Logger.log('Deleted label: %s', name);
+    } else {
+      Logger.log('Label not found (already removed): %s', name);
+    }
+  });
+}
+
 function setup() {
   // Invoice folder
   let folderId = getProp_('INVOICE_FOLDER_ID') || CONFIG.INVOICE_FOLDER_ID;

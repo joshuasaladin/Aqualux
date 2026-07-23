@@ -5,8 +5,9 @@
  *
  *   sent / draft            — invoice PDF + confirmation email
  *   clarification-sent      — friendly email asking for the missing details
- *   needs-review            — no guest invoice; original starred + owner
- *                             alerted by email (no Gmail labels are used)
+ *   needs-review            — no guest invoice; owner alerted by a separate
+ *                             email (the inbox itself is never touched —
+ *                             no labels, no starring)
  *   (silently ignored)      — non-Wix mail that happened to match the query
  *
  * Handled-once tracking is PER MESSAGE via the log sheet's Message ID
@@ -268,15 +269,11 @@ function menuOptionLines_(service, partySize) {
 }
 
 /**
- * Flag the original email for review: star it (no Gmail labels are created
- * or applied) and alert the owner by email.
+ * Flag a submission for review: no labels, no starring, no changes to the
+ * inbox at all — the owner is alerted purely by a separate email.
  */
 function markReview_(message, reason) {
-  try {
-    message.star();
-  } catch (e) { /* starring is best-effort */ }
-  notifyOwner_('Needs review: ' + (message.getSubject() || '(no subject)'),
-    reason + '\n\nThe original email has been starred in your inbox — open Gmail and search "is:starred" to find it.');
+  notifyOwner_('Needs review: ' + (message.getSubject() || '(no subject)'), reason);
 }
 
 /** The chef menu PDF from Drive, when configured; null otherwise. */
