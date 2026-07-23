@@ -228,9 +228,12 @@ app.patch('/api/leads/:id', (req, res) => {
 });
 
 app.delete('/api/leads/:id', (req, res) => {
+  // Remember every thread of this lead so a sync doesn't re-import it.
   const lead = db.prepare(`SELECT gmail_thread_id FROM leads WHERE id = ?`).get(req.params.id);
-  // Remember the thread so the next sync doesn't re-import a deleted lead.
   if (lead?.gmail_thread_id) markThreadProcessed(lead.gmail_thread_id);
+  for (const t of db.prepare(`SELECT thread_id FROM lead_threads WHERE lead_id = ?`).all(req.params.id)) {
+    markThreadProcessed(t.thread_id);
+  }
   db.prepare(`DELETE FROM leads WHERE id = ?`).run(req.params.id);
   res.json({ ok: true });
 });
@@ -278,6 +281,28 @@ app.post('/api/signature', (req, res) => {
   res.json({ ok: true });
 });
 
+// Signature image: uploaded once, embedded inline in every outgoing email.
+app.get('/api/signature-image', (req, res) => {
+  res.json({ image: getSetting('signature_image', null) });
+});
+
+app.post('/api/signature-image', (req, res) => {
+  const { data, mimeType, filename } = req.body || {};
+  if (!data || !/^image\/(png|jpe?g|gif|webp)$/.test(mimeType || '')) {
+    return res.status(400).json({ error: 'Upload a PNG, JPG, GIF or WebP image' });
+  }
+  if (data.length > 2 * 1024 * 1024 * 4 / 3) {
+    return res.status(400).json({ error: 'Image too large — keep it under 2 MB' });
+  }
+  setSetting('signature_image', { data, mimeType, filename: String(filename || 'signature').slice(0, 100) });
+  res.json({ ok: true });
+});
+
+app.delete('/api/signature-image', (req, res) => {
+  setSetting('signature_image', null);
+  res.json({ ok: true });
+});
+
 // ------------------------------------------------------------ payments ----
 app.get('/api/payments', (req, res) => {
   const rows = db.prepare(`
@@ -288,6 +313,23 @@ app.get('/api/payments', (req, res) => {
            COALESCE(SUM(CASE WHEN received_at >= date('now', '-7 days') THEN amount ELSE 0 END), 0) AS this_week
     FROM payments`).get();
   res.json({ totals, payments: rows });
+});
+
+// Manual payment: cash, bank transfer, or anything Gmail didn't catch.
+app.post('/api/payments', (req, res) => {
+  const { payer, payer_email = '', service = '', amount, amount_due = 0,
+          source = 'Cash', notes = '', received_at } = req.body || {};
+  if (!payer?.trim()) return res.status(400).json({ error: 'Name is required' });
+  const when = /^\d{4}-\d{2}-\d{2}/.test(received_at || '')
+    ? new Date(received_at + 'T12:00:00').toISOString()
+    : new Date().toISOString();
+  const info = db.prepare(`
+    INSERT INTO payments (source, payer, payer_email, service, amount, amount_due, notes, received_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(String(source).slice(0, 40), payer.trim().slice(0, 120), String(payer_email).slice(0, 200),
+         String(service).slice(0, 200), Number(amount) || 0, Number(amount_due) || 0,
+         String(notes).slice(0, 1000), when);
+  res.status(201).json(db.prepare(`SELECT * FROM payments WHERE id = ?`).get(info.lastInsertRowid));
 });
 
 app.delete('/api/payments/:id', (req, res) => {

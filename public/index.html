@@ -73,9 +73,12 @@
     <!-- ============================ PAYMENTS ============================= -->
     <section id="view-payments" class="view hidden">
       <div class="stat-grid" id="pay-stats"></div>
-      <h2>Payments received</h2>
+      <div class="filters">
+        <h2 style="margin:0; flex:1">Payments received</h2>
+        <button class="btn btn-primary" id="btn-add-payment">+ Add payment</button>
+      </div>
       <div id="payment-list" class="card-list"></div>
-      <p class="cal-hint">Money-received notifications from Venmo, Zelle, Chase, PayPal and similar are collected here automatically.</p>
+      <p class="cal-hint">Venmo, Zelle, Chase, PayPal notifications are collected automatically — use “+ Add payment” for cash or transfers that didn’t come through email.</p>
     </section>
 
     <!-- ============================ CLIENTS ============================== -->
@@ -92,7 +95,15 @@
       <div class="panel" id="gmail-panel"></div>
       <h2>Email signature</h2>
       <div class="panel">
-        <p class="reply-hint" style="margin-bottom:8px">Added automatically to the bottom of every reply you send from the CRM.</p>
+        <p class="reply-hint" style="margin-bottom:8px"><b>Signature image</b> — upload your designed signature (e.g. from Canva) and every email you send ends with it. When an image is set, it replaces the text signature below.</p>
+        <div id="sig-img-area"></div>
+        <input type="file" id="sig-img-file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+        <div style="margin:10px 0 18px; display:flex; gap:8px">
+          <button class="btn btn-sm" id="sig-img-upload">🖼️ Upload image</button>
+          <button class="btn btn-sm btn-danger hidden" id="sig-img-remove">Remove image</button>
+          <span class="send-status" id="sig-img-status"></span>
+        </div>
+        <p class="reply-hint" style="margin-bottom:8px"><b>Text signature</b> — used when no image is uploaded.</p>
         <textarea id="sig-text" rows="9" spellcheck="false"></textarea>
         <button class="btn btn-primary btn-sm" id="sig-save" style="margin-top:8px">Save signature</button>
         <span class="send-status" id="sig-status"></span>
@@ -127,6 +138,40 @@
       <div class="modal-actions">
         <button type="button" class="btn" id="modal-cancel">Cancel</button>
         <button type="submit" class="btn btn-primary">Create lead</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ======================== MANUAL PAYMENT MODAL ======================== -->
+<div id="payment-modal-backdrop" class="modal-backdrop hidden">
+  <div class="modal">
+    <h2>Add payment</h2>
+    <form id="payment-form">
+      <div class="form-row">
+        <label>Name *<input name="payer" required placeholder="Who paid you"></label>
+        <label>Email<input name="payer_email" type="email" placeholder="their@email.com"></label>
+      </div>
+      <div class="form-row">
+        <label>Service<input name="service" placeholder="e.g. Catamaran Tour"></label>
+        <label>Method
+          <select name="source">
+            <option>Cash</option><option>Bank transfer</option><option>Venmo</option>
+            <option>Zelle</option><option>PayPal</option><option>Other</option>
+          </select>
+        </label>
+      </div>
+      <div class="form-row">
+        <label>Amount paid *<input name="amount" type="number" min="0" step="0.01" required placeholder="0.00"></label>
+        <label>Amount still due<input name="amount_due" type="number" min="0" step="0.01" placeholder="0.00"></label>
+      </div>
+      <div class="form-row">
+        <label>Date received<input name="received_at" type="date"></label>
+        <label>Notes<input name="notes" placeholder="Anything worth remembering…"></label>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="payment-cancel">Cancel</button>
+        <button type="submit" class="btn btn-primary">Add payment</button>
       </div>
     </form>
   </div>

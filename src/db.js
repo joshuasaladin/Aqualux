@@ -68,6 +68,13 @@ db.exec(`
     thread_id TEXT PRIMARY KEY
   );
 
+  -- Extra Gmail threads attached to a lead (a client who writes in again
+  -- from a new email thread stays ONE lead).
+  CREATE TABLE IF NOT EXISTS lead_threads (
+    thread_id TEXT PRIMARY KEY,
+    lead_id   INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE
+  );
+
   -- Incoming payment notifications (Venmo, Zelle, Chase, PayPal, ...)
   CREATE TABLE IF NOT EXISTS payments (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,6 +106,15 @@ function ensureColumn(table, col, ddl) {
 }
 ensureColumn('leads', 'party_size', 'party_size INTEGER');
 ensureColumn('leads', 'source', `source TEXT NOT NULL DEFAULT 'email'`);
+ensureColumn('leads', 'merged_count', 'merged_count INTEGER NOT NULL DEFAULT 1');
+ensureColumn('payments', 'payer_email', `payer_email TEXT DEFAULT ''`);
+ensureColumn('payments', 'service', `service TEXT DEFAULT ''`);
+ensureColumn('payments', 'amount_due', 'amount_due REAL DEFAULT 0');
+ensureColumn('payments', 'notes', `notes TEXT DEFAULT ''`);
+
+// Register each lead's primary Gmail thread in lead_threads (idempotent).
+db.exec(`INSERT OR IGNORE INTO lead_threads (thread_id, lead_id)
+         SELECT gmail_thread_id, id FROM leads WHERE gmail_thread_id IS NOT NULL`);
 
 // One-time cleanup: strip Wix tracking-link footers from already-imported
 // form messages ("Click on the link below…" / "This email was sent as a…").

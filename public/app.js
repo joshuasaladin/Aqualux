@@ -120,6 +120,7 @@ function leadCard(l) {
     <div class="card-top">
       <span class="card-title">${esc(l.client_name)}</span>
       ${statusBadge(l.status)} ${payBadge(l.paid)} ${bookBadge(l.booking_confirmed)}
+      ${l.merged_count > 1 ? `<span class="badge multi">📨 ${l.merged_count} submissions</span>` : ''}
       <span class="card-right">
         ${total ? `<span class="card-amount">${money(total)}${owed > 0 && owed < total ?
           ` <span class="owed">(${money(owed)} due)</span>` : ''}</span>` : ''}
@@ -244,20 +245,24 @@ async function loadPayments() {
     <div class="stat"><div class="num">${money(totals.all_time)}</div><div class="label">All time</div></div>
     <div class="stat"><div class="num">${payments.length}</div><div class="label">Payments</div></div>`;
   $('#payment-list').innerHTML = payments.length
-    ? payments.map((p) => `
+    ? payments.map((p) => {
+        const sub = [p.service, p.payer_email, p.subject, p.notes].filter(Boolean).map(esc).join(' · ');
+        return `
       <div class="card pay-card" data-pay="${p.id}">
         <div class="card-top">
-          <span class="card-title">${SOURCE_ICONS[p.source] || '💳'} ${esc(p.payer || p.source)}</span>
+          <span class="card-title">${SOURCE_ICONS[p.source] || '💵'} ${esc(p.payer || p.source)}</span>
           <span class="badge pay-paid">${esc(p.source)}</span>
+          ${p.amount_due > 0 ? `<span class="badge pay-unpaid">${money(p.amount_due)} still due</span>` : ''}
           <span class="card-right">
             <span class="card-amount pay-amount">+${money(p.amount)}</span>
             <span class="card-sub">${timeAgo(p.received_at)}</span>
             <button class="btn btn-sm btn-danger pay-del" title="Remove">×</button>
           </span>
         </div>
-        <div class="card-sub">${esc(p.subject)}</div>
-      </div>`).join('')
-    : `<div class="empty">No payments yet. When Venmo, Zelle or your bank emails you a “you received money” notification, it appears here.</div>`;
+        ${sub ? `<div class="card-sub">${sub}</div>` : ''}
+      </div>`;
+      }).join('')
+    : `<div class="empty">No payments yet. Payment emails appear here automatically — or click “+ Add payment” for cash.</div>`;
   document.querySelectorAll('#payment-list .pay-del').forEach((btn) =>
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -267,6 +272,25 @@ async function loadPayments() {
       loadPayments();
     }));
 }
+
+/* --- manual payment modal --- */
+$('#btn-add-payment').addEventListener('click', () => {
+  $('#payment-form').reset();
+  $('#payment-form [name=received_at]').value = new Date().toISOString().slice(0, 10);
+  $('#payment-modal-backdrop').classList.remove('hidden');
+  $('#payment-form [name=payer]').focus();
+});
+$('#payment-cancel').addEventListener('click', () => $('#payment-modal-backdrop').classList.add('hidden'));
+$('#payment-modal-backdrop').addEventListener('click', (e) => {
+  if (e.target === $('#payment-modal-backdrop')) $('#payment-modal-backdrop').classList.add('hidden');
+});
+$('#payment-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const body = Object.fromEntries(new FormData(e.target).entries());
+  await api('/payments', { method: 'POST', body: JSON.stringify(body) });
+  $('#payment-modal-backdrop').classList.add('hidden');
+  loadPayments();
+});
 
 /* ------------------------------------------------------------ clients --- */
 async function loadClients() {
@@ -308,7 +332,8 @@ async function openLead(id) {
   $('#drawer-content').innerHTML = `
   <div class="drawer-head">
     <button class="close" id="drawer-close">×</button>
-    <h2>${esc(l.client_name)} ${statusBadge(l.status)}</h2>
+    <h2>${esc(l.client_name)} ${statusBadge(l.status)}
+      ${l.merged_count > 1 ? `<span class="badge multi">📨 ${l.merged_count} submissions</span>` : ''}</h2>
     <div class="client-line">
       <a href="mailto:${esc(l.client_email)}">${esc(l.client_email)}</a>
       ${l.client_phone ? ' · ' + esc(l.client_phone) : ''}
@@ -350,11 +375,15 @@ async function openLead(id) {
     <div class="panel">
       <h3>Conversation</h3>
       <div class="thread">
-        ${l.messages.length ? l.messages.map((m) => `
+        ${l.messages.length ? l.messages.map((m) => {
+          const isFormSubmission = m.body.startsWith('Website form submission');
+          return `
           <div class="msg ${m.direction}">
-            <div class="m-meta">${m.direction === 'in' ? esc(l.client_name) : 'You'} · ${fmtDateTime(m.sent_at)}</div>
+            ${isFormSubmission ? '' :
+              `<div class="m-meta">${m.direction === 'in' ? esc(l.client_name) : 'You'} · ${fmtDateTime(m.sent_at)}</div>`}
             ${esc(m.body)}
-          </div>`).join('') : '<div class="empty">No emails on this lead yet.</div>'}
+          </div>`;
+        }).join('') : '<div class="empty">No emails on this lead yet.</div>'}
       </div>
       <div class="reply-box">
         <textarea id="d-reply" placeholder="Write your reply — it sends from your Gmail…" ${canEmail ? '' : 'disabled'}></textarea>
@@ -446,6 +475,13 @@ async function openLead(id) {
 
   // --- footer button: insert the signature at the bottom of the message ---
   $('#d-footer')?.addEventListener('click', async () => {
+    const { image } = await api('/signature-image');
+    if (image) {
+      const st = $('#d-send-status');
+      st.classList.remove('err');
+      st.textContent = '🖼️ Your signature image is added to every email automatically.';
+      return;
+    }
     const { signature } = await api('/signature');
     if (!signature?.trim()) { showView('settings'); return; }
     const firstLine = signature.split('\n').map((l) => l.trim()).find((l) => l.length > 3);
@@ -583,6 +619,41 @@ async function loadSettings() {
     await api('/signature', { method: 'POST', body: JSON.stringify({ signature: $('#sig-text').value }) });
     $('#sig-status').textContent = 'Saved ✓';
     setTimeout(() => { $('#sig-status').textContent = ''; }, 1500);
+  };
+
+  // --- signature image ---
+  async function renderSigImage() {
+    const { image } = await api('/signature-image');
+    $('#sig-img-area').innerHTML = image
+      ? `<img src="data:${image.mimeType};base64,${image.data}" alt="Signature" style="max-width:400px; border:1px solid var(--border); border-radius:8px">`
+      : `<div class="empty" style="padding:14px">No image uploaded — the text signature below is used.</div>`;
+    $('#sig-img-remove').classList.toggle('hidden', !image);
+  }
+  renderSigImage();
+  $('#sig-img-upload').onclick = () => $('#sig-img-file').click();
+  $('#sig-img-file').onchange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) { alert('Keep the image under 2 MB.'); return; }
+    const data = await new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result.split(',')[1]);
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+    await api('/signature-image', {
+      method: 'POST',
+      body: JSON.stringify({ data, mimeType: file.type, filename: file.name })
+    });
+    e.target.value = '';
+    $('#sig-img-status').textContent = 'Uploaded ✓ — every email now ends with this image.';
+    setTimeout(() => { $('#sig-img-status').textContent = ''; }, 3000);
+    renderSigImage();
+  };
+  $('#sig-img-remove').onclick = async () => {
+    if (!confirm('Remove the signature image? Emails will use the text signature instead.')) return;
+    await api('/signature-image', { method: 'DELETE' });
+    renderSigImage();
   };
 
   const panel = $('#gmail-panel');

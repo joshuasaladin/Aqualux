@@ -310,8 +310,51 @@ function recordPayment(pay, msg, subject, body) {
          body.slice(0, 2000), new Date(Number(msg.internalDate)).toISOString());
 }
 
-function createLeadFromForm(form, msg) {
+/** The client's most recently active lead, if any — merge target. */
+function latestLeadForClient(clientId) {
+  return db.prepare(`
+    SELECT * FROM leads WHERE client_id = ?
+    ORDER BY updated_at DESC LIMIT 1`).get(clientId);
+}
+
+function registerThread(threadId, leadId) {
+  db.prepare(`INSERT OR IGNORE INTO lead_threads (thread_id, lead_id) VALUES (?, ?)`)
+    .run(threadId, leadId);
+}
+
+function bumpMergedCount(leadId) {
+  db.prepare(`UPDATE leads SET merged_count = merged_count + 1 WHERE id = ?`).run(leadId);
+}
+
+/**
+ * A form submission either creates a lead or — when this person already has
+ * one — is added to their existing lead as another submission.
+ */
+export function handleFormSubmission(form, msg) {
   const client = upsertClient({ name: form.name, email: form.email, phone: form.phone });
+  const body = `Website form submission — ${form.formName}\n\n${form.details}`;
+  const sentAt = new Date(Number(msg.internalDate)).toISOString();
+
+  const existing = latestLeadForClient(client.id);
+  if (existing) {
+    const ins = db.prepare(`
+      INSERT OR IGNORE INTO messages (lead_id, gmail_message_id, direction, from_email, subject, body, sent_at)
+      VALUES (?, ?, 'in', ?, ?, ?, ?)`)
+      .run(existing.id, msg.id, form.email, form.formName, body, sentAt);
+    if (ins.changes) {
+      bumpMergedCount(existing.id);
+      // fill in blanks from the new submission, never overwrite your edits
+      if (!existing.service_date && form.serviceDate) {
+        db.prepare(`UPDATE leads SET service_date = ? WHERE id = ?`).run(form.serviceDate, existing.id);
+      }
+      if (!existing.party_size && form.partySize) {
+        db.prepare(`UPDATE leads SET party_size = ? WHERE id = ?`).run(form.partySize, existing.id);
+      }
+      recomputeStatus(existing.id);
+    }
+    return existing.id;
+  }
+
   const info = db.prepare(`
     INSERT INTO leads (client_id, subject, service, service_date, party_size, source)
     VALUES (?, ?, ?, ?, ?, 'website_form')`)
@@ -319,9 +362,7 @@ function createLeadFromForm(form, msg) {
   db.prepare(`
     INSERT INTO messages (lead_id, gmail_message_id, direction, from_email, subject, body, sent_at)
     VALUES (?, ?, 'in', ?, ?, ?, ?)`)
-    .run(info.lastInsertRowid, msg.id, form.email, form.formName,
-         `Website form submission — ${form.formName}\n\n${form.details}`,
-         new Date(Number(msg.internalDate)).toISOString());
+    .run(info.lastInsertRowid, msg.id, form.email, form.formName, body, sentAt);
   recomputeStatus(info.lastInsertRowid);
   return info.lastInsertRowid;
 }
@@ -341,7 +382,7 @@ export async function syncNow() {
     // 1. New inbox threads -> new leads
     const list = await apiGet(`/threads?q=${encodeURIComponent(`in:inbox after:${since}`)}&maxResults=50`);
     for (const t of list.threads || []) {
-      if (db.prepare(`SELECT id FROM leads WHERE gmail_thread_id = ?`).get(t.id)) continue;
+      if (db.prepare(`SELECT 1 FROM lead_threads WHERE thread_id = ?`).get(t.id)) continue;
       if (db.prepare(`SELECT 1 FROM processed_threads WHERE thread_id = ?`).get(t.id)) continue;
       const thread = await apiGet(`/threads/${t.id}?format=full`);
       const first = thread.messages?.[0];
@@ -355,7 +396,7 @@ export async function syncNow() {
       // Website form notification? Lead belongs to the visitor, not the form service.
       const form = parseFormSubmission(from, bodyText);
       if (form) {
-        createLeadFromForm(form, first);
+        handleFormSubmission(form, first);
         markThreadProcessed(t.id);
         created++;
         continue;
@@ -378,23 +419,35 @@ export async function syncNow() {
       if (isBulkMail(first, from)) { markThreadProcessed(t.id); continue; }
 
       const client = upsertClient({ name: from.name, email: from.email });
+      const existing = latestLeadForClient(client.id);
+      if (existing) {
+        // Same person writing in again from a new thread -> same lead.
+        registerThread(t.id, existing.id);
+        if (!existing.gmail_thread_id) {
+          db.prepare(`UPDATE OR IGNORE leads SET gmail_thread_id = ? WHERE id = ?`).run(t.id, existing.id);
+        }
+        if (absorbThreadMessages(existing.id, thread, myEmail)) bumpMergedCount(existing.id);
+        updated++;
+        continue;
+      }
       const info = db.prepare(`
         INSERT INTO leads (client_id, gmail_thread_id, subject, service)
         VALUES (?, ?, ?, ?)`).run(client.id, t.id, subject, subject);
+      registerThread(t.id, info.lastInsertRowid);
       absorbThreadMessages(info.lastInsertRowid, thread, myEmail);
       created++;
     }
 
-    // 2. Refresh tracked threads (catches client replies AND your replies
-    //    sent from Gmail directly, so status stays correct either way).
+    // 2. Refresh every tracked thread (catches client replies AND your
+    //    replies sent from Gmail directly, so status stays correct).
     const tracked = db.prepare(`
-      SELECT id, gmail_thread_id FROM leads
-      WHERE gmail_thread_id IS NOT NULL
-      ORDER BY updated_at DESC LIMIT 100`).all();
-    for (const lead of tracked) {
+      SELECT lt.thread_id, lt.lead_id FROM lead_threads lt
+      JOIN leads l ON l.id = lt.lead_id
+      ORDER BY l.updated_at DESC LIMIT 150`).all();
+    for (const row of tracked) {
       try {
-        const thread = await apiGet(`/threads/${lead.gmail_thread_id}?format=full`);
-        if (absorbThreadMessages(lead.id, thread, myEmail)) updated++;
+        const thread = await apiGet(`/threads/${row.thread_id}?format=full`);
+        if (absorbThreadMessages(row.lead_id, thread, myEmail)) updated++;
       } catch { /* thread deleted in Gmail — leave the lead as-is */ }
     }
 
@@ -507,24 +560,49 @@ export async function sendReply(lead, client, bodyText, attachments = []) {
     headers.push(`In-Reply-To: ${lastIn.rfc_message_id}`, `References: ${lastIn.rfc_message_id}`);
   }
 
-  // Append the signature (Settings tab) unless the message already contains
-  // it — e.g. when it was inserted with the "Footer" button and possibly edited.
-  const signature = getSetting('email_signature', DEFAULT_SIGNATURE) || '';
-  const sigLines = signature.split('\n').map((l) => l.trim()).filter((l) => l.length > 3);
-  const alreadyHasSig = sigLines.some((l) => bodyText.includes(l));
-  const fullBody = signature.trim() && !alreadyHasSig ? `${bodyText}\n\n${signature}` : bodyText;
-
-  // Encode text as base64 so emoji and accents in the signature survive.
   const fold = (s) => s.replace(/.{76}/g, '$&\r\n');
-  const textB64 = fold(Buffer.from(fullBody, 'utf8').toString('base64'));
+  const sigImage = getSetting('signature_image'); // { data, mimeType, filename }
+
+  // Build the message content: with a signature image the email is HTML with
+  // the image embedded inline; otherwise plain text with the text signature.
+  let core; // { type: content-type header value, extra: [], content: string }
+  if (sigImage?.data) {
+    const escHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const html =
+      `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;white-space:pre-wrap">${escHtml(bodyText)}</div>` +
+      `<br><img src="cid:aqualuxsig" alt="Aqua Lux Aruba — Concierge & Guest services" style="max-width:420px;height:auto">`;
+    const rel = 'related_' + crypto.randomBytes(8).toString('hex');
+    core = {
+      type: `multipart/related; boundary="${rel}"`,
+      extra: [],
+      content:
+        `--${rel}\r\nContent-Type: text/html; charset="UTF-8"\r\n` +
+        `Content-Transfer-Encoding: base64\r\n\r\n${fold(Buffer.from(html, 'utf8').toString('base64'))}\r\n` +
+        `--${rel}\r\nContent-Type: ${sigImage.mimeType}\r\n` +
+        `Content-Transfer-Encoding: base64\r\n` +
+        `Content-ID: <aqualuxsig>\r\n` +
+        `Content-Disposition: inline; filename="signature"\r\n\r\n${fold(sigImage.data)}\r\n--${rel}--\r\n`
+    };
+  } else {
+    // Append the text signature unless the message already contains it —
+    // e.g. inserted with the "Footer" button and possibly edited.
+    const signature = getSetting('email_signature', DEFAULT_SIGNATURE) || '';
+    const sigLines = signature.split('\n').map((l) => l.trim()).filter((l) => l.length > 3);
+    const alreadyHasSig = sigLines.some((l) => bodyText.includes(l));
+    const fullBody = signature.trim() && !alreadyHasSig ? `${bodyText}\n\n${signature}` : bodyText;
+    core = {
+      type: 'text/plain; charset="UTF-8"',
+      extra: ['Content-Transfer-Encoding: base64'],
+      content: fold(Buffer.from(fullBody, 'utf8').toString('base64'))
+    };
+  }
 
   let rfc822;
   if (attachments.length) {
     const boundary = 'aqualux_' + crypto.randomBytes(8).toString('hex');
     headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
     const parts = [
-      `--${boundary}\r\nContent-Type: text/plain; charset="UTF-8"\r\n` +
-      `Content-Transfer-Encoding: base64\r\n\r\n${textB64}\r\n`
+      `--${boundary}\r\nContent-Type: ${core.type}\r\n${core.extra.map((h) => h + '\r\n').join('')}\r\n${core.content}\r\n`
     ];
     for (const a of attachments) {
       parts.push(
@@ -538,8 +616,8 @@ export async function sendReply(lead, client, bodyText, attachments = []) {
     parts.push(`--${boundary}--`);
     rfc822 = headers.join('\r\n') + '\r\n\r\n' + parts.join('');
   } else {
-    headers.push('Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64');
-    rfc822 = headers.join('\r\n') + '\r\n\r\n' + textB64;
+    headers.push(`Content-Type: ${core.type}`, ...core.extra);
+    rfc822 = headers.join('\r\n') + '\r\n\r\n' + core.content;
   }
 
   const sent = await apiSendRaw(rfc822, lead.gmail_thread_id || undefined);
@@ -548,6 +626,7 @@ export async function sendReply(lead, client, bodyText, attachments = []) {
   if (!lead.gmail_thread_id && sent.threadId) {
     db.prepare(`UPDATE OR IGNORE leads SET gmail_thread_id = ? WHERE id = ?`).run(sent.threadId, lead.id);
   }
+  if (sent.threadId) registerThread(sent.threadId, lead.id);
   const storedBody = bodyText +
     (attachments.length ? `\n\n📎 ${attachments.map((a) => a.filename).join(', ')}` : '');
   db.prepare(`

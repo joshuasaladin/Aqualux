@@ -106,6 +106,7 @@ main { max-width: 1060px; margin: 0 auto; padding: 22px; }
 .badge.pay-paid   { background: #e4f6ec; color: var(--green); }
 .badge.bk-yes { background: #e5f6fa; color: var(--aqua-dark); }
 .badge.bk-no  { background: #f1f3f5; color: #7a8791; }
+.badge.multi  { background: #fdf3dd; color: var(--gold); }
 
 /* ------------------------------------------------------------- filters --- */
 .filters { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
@@ -120,7 +121,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--aqua); outl
 /* -------------------------------------------------------------- drawer --- */
 .drawer-backdrop { position: fixed; inset: 0; background: rgba(11, 31, 51, .45); z-index: 30; }
 .drawer {
-  position: fixed; top: 0; right: 0; bottom: 0; width: min(620px, 100vw);
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(880px, 100vw);
   background: var(--bg); z-index: 31; overflow-y: auto;
   box-shadow: -6px 0 24px rgba(11, 31, 51, .25);
 }
