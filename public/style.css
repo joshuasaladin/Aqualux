@@ -238,25 +238,65 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--aqua); outl
 .svc-category-head .count { color: var(--muted); font-size: .82rem; font-weight: 500; }
 .svc-category-head .chev { margin-left: auto; color: var(--muted); transition: transform .15s; }
 .svc-category.collapsed .chev { transform: rotate(-90deg); }
-.svc-category.collapsed .svc-company-group { display: none; }
+.svc-category.collapsed .svc-category-items { display: none; }
 
-.svc-company-group { margin-bottom: 14px; }
-.svc-company-name { font-weight: 650; color: var(--navy); font-size: .88rem; margin-bottom: 6px; }
-.svc-row-card {
-  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+.svc-card {
   background: var(--card); border: 1px solid var(--border); border-radius: 8px;
-  padding: 10px 14px; margin-bottom: 6px; cursor: pointer;
+  margin-bottom: 8px; overflow: hidden;
 }
-.svc-row-card:hover { border-color: var(--aqua); }
-.svc-row-title { font-weight: 600; color: var(--text); }
-.svc-row-option { color: var(--muted); }
-.svc-row-right { margin-left: auto; display: flex; align-items: center; gap: 10px; font-size: .85rem; }
-.svc-row-price { font-weight: 650; color: var(--navy); white-space: nowrap; }
-.svc-row-timing { color: var(--muted); white-space: nowrap; }
-.svc-row-people { color: var(--muted); white-space: nowrap; }
+.svc-card.expanded { border-color: var(--aqua); }
+.svc-card-head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 12px 14px; cursor: pointer;
+}
+.svc-card-head:hover { background: rgba(25, 167, 194, .05); }
+.svc-card-title { font-weight: 650; color: var(--text); }
+.svc-card-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.svc-price-summary { font-size: .85rem; font-weight: 600; color: var(--navy); white-space: nowrap; }
+.svc-card .chev { color: var(--muted); transition: transform .15s; }
+.svc-card.expanded .chev { transform: rotate(180deg); }
+.svc-company-badge {
+  background: var(--bg); color: var(--navy); border: 1px solid var(--border); border-radius: 999px;
+  padding: 2px 9px; font-size: .74rem; font-weight: 600; white-space: nowrap;
+}
 .svc-comm-badge {
   background: #e5f6fa; color: var(--aqua-dark); border-radius: 999px;
   padding: 2px 9px; font-size: .74rem; font-weight: 600; white-space: nowrap;
+}
+.svc-flag-badge {
+  background: #fdf3dd; color: var(--amber); border-radius: 999px;
+  padding: 2px 9px; font-size: .74rem; font-weight: 600; white-space: nowrap;
+}
+
+.svc-card-body { padding: 4px 14px 16px; border-top: 1px solid var(--border); }
+.svc-vendor-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin: 14px 0 18px;
+}
+.svc-vendor-grid label { font-size: .78rem; color: var(--muted); }
+.svc-vendor-grid input { margin-top: 3px; }
+.svc-card-body h4 { font-size: .78rem; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin-bottom: 8px; }
+
+.opt-rows { display: flex; flex-direction: column; gap: 10px; margin-bottom: 10px; }
+.opt-row { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+.opt-row-line1 { display: flex; gap: 8px; margin-bottom: 6px; }
+.opt-row-line1 .opt-name { flex: 2; font-weight: 600; }
+.opt-row-line1 .opt-timing { flex: 1; }
+.opt-del { flex: none; padding: 4px 10px; color: var(--red); }
+.opt-row-line2, .opt-row-line3 {
+  display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 6px; align-items: end;
+}
+.opt-row-line3 { grid-template-columns: 1fr 1fr 1fr 2fr; }
+.opt-field { font-size: .72rem; color: var(--muted); }
+.opt-field input, .opt-field select { margin-top: 3px; padding: 6px 8px; font-size: .84rem; }
+.opt-field.mini-check { display: flex; align-items: center; gap: 5px; padding-bottom: 8px; }
+.opt-field.mini-check input { width: auto; margin: 0; accent-color: var(--aqua); }
+.opt-notes { font-size: .84rem; padding: 6px 8px; }
+
+.svc-card-actions { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+
+@media (max-width: 640px) {
+  .svc-vendor-grid { grid-template-columns: 1fr; }
+  .opt-row-line2, .opt-row-line3 { grid-template-columns: 1fr 1fr; }
 }
 
 /* ------------------------------------------------------------ calendar --- */

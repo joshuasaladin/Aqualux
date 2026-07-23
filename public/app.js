@@ -350,72 +350,148 @@ $('#payment-form').addEventListener('submit', async (e) => {
 });
 
 /* ------------------------------------------------------ services book --- */
-const PRICE_UNIT_LABELS = { per_person: '/ person', per_hour: '/ hour', flat_total: 'flat' };
+const PRICE_UNIT_LABELS = {
+  per_person: '/ person', per_hour: '/ hour', per_day: '/ day',
+  per_vehicle: '/ vehicle', flat_total: 'flat', quote: 'quote'
+};
 const collapsedCategories = new Set(JSON.parse(localStorage.getItem('aqualux_collapsed_cats') || '[]'));
+const expandedServices = new Set();
 
-function fmtDownpayment(s) {
-  if (!s.downpayment_value) return '';
-  return s.downpayment_type === 'percent' ? `${s.downpayment_value}% down` : `${money(s.downpayment_value)} down`;
+function fmtDownpayment(o) {
+  const parts = [];
+  if (o.downpayment_percent) parts.push(`${o.downpayment_percent}%`);
+  if (o.downpayment_fixed) parts.push(`${money(o.downpayment_fixed)}${o.downpayment_per_person ? '/person' : ''}`);
+  return parts.length ? parts.join(' + ') + ' down' : '';
 }
 
-function serviceRowCard(s) {
-  const title = [s.service_name, s.option_name].filter(Boolean).join(' — ');
-  const people = (s.min_people || s.max_people)
-    ? `👥 ${s.min_people || 1}${s.max_people ? '–' + s.max_people : '+'}` : '';
-  const dp = fmtDownpayment(s);
+function priceSummary(options) {
+  const priced = options.filter((o) => o.price_unit !== 'quote' && o.price);
+  if (!priced.length) return options.length ? 'Quote only' : 'No pricing yet';
+  const prices = priced.map((o) => o.price);
+  const lo = Math.min(...prices), hi = Math.max(...prices);
+  const unit = PRICE_UNIT_LABELS[priced[0].price_unit] || '';
+  const range = lo === hi ? money(lo) : `${money(lo)}–${money(hi)}`;
+  return `${range} ${unit}${options.length > 1 ? ` · ${options.length} options` : ''}`;
+}
+
+function optionSummaryLine(o) {
+  const people = (o.min_people || o.max_people)
+    ? `👥 ${o.min_people || 1}${o.max_people ? '–' + o.max_people : '+'}` : '';
+  const dp = fmtDownpayment(o);
+  const price = o.price_unit === 'quote' ? 'Personal quote' : `${money(o.price)} ${PRICE_UNIT_LABELS[o.price_unit]}`;
+  return { people, dp, price };
+}
+
+function serviceCard(s) {
+  const expanded = expandedServices.has(s.id);
+  const hasFlag = s.options.some((o) => o.notes?.includes('⚠'));
   return `
-  <div class="svc-row-card" data-service="${s.id}">
-    <span class="svc-row-title">${esc(title)}</span>
-    <span class="svc-row-right">
-      ${s.price ? `<span class="svc-row-price">${money(s.price)} ${PRICE_UNIT_LABELS[s.price_unit]}</span>` : ''}
-      ${people ? `<span class="svc-row-people">${people}</span>` : ''}
-      ${s.timing ? `<span class="svc-row-timing">⏱ ${esc(s.timing)}</span>` : ''}
-      ${dp ? `<span class="svc-row-timing">💰 ${esc(dp)}</span>` : ''}
-      ${s.communication_method ? `<span class="svc-comm-badge">${esc(s.communication_method)}</span>` : ''}
-    </span>
+  <div class="svc-card ${expanded ? 'expanded' : ''}" data-service="${s.id}">
+    <div class="svc-card-head" data-toggle="${s.id}">
+      <span class="svc-card-title">${esc(s.service_name)}</span>
+      ${s.company ? `<span class="svc-company-badge">${esc(s.company)}</span>` : ''}
+      ${s.booking_method ? `<span class="svc-comm-badge">${esc(s.booking_method)}</span>` : ''}
+      ${hasFlag ? `<span class="svc-flag-badge">⚠ needs review</span>` : ''}
+      <span class="svc-card-right">
+        <span class="svc-price-summary">${esc(priceSummary(s.options))}</span>
+        <span class="chev">▾</span>
+      </span>
+    </div>
+    ${expanded ? serviceCardBody(s) : ''}
   </div>`;
 }
 
+function optionEditRow(o = {}, idx) {
+  const id = o.id ?? `new${idx}`;
+  return `
+  <div class="opt-row" data-opt="${id}">
+    <div class="opt-row-line1">
+      <input class="opt-name" placeholder="Option name (e.g. Sunset Tour)" value="${esc(o.option_name || '')}">
+      <input class="opt-timing" placeholder="Timing (e.g. 5:30pm–7:30pm)" value="${esc(o.timing || '')}">
+      <button type="button" class="btn btn-sm opt-del" title="Remove option">×</button>
+    </div>
+    <div class="opt-row-line2">
+      <label class="opt-field">Price<input class="opt-price" type="number" min="0" step="0.01" value="${o.price ?? ''}" placeholder="0.00"></label>
+      <label class="opt-field">Unit
+        <select class="opt-unit">
+          <option value="per_person" ${o.price_unit === 'per_person' ? 'selected' : ''}>per person</option>
+          <option value="flat_total" ${o.price_unit === 'flat_total' ? 'selected' : ''}>flat total</option>
+          <option value="per_vehicle" ${o.price_unit === 'per_vehicle' ? 'selected' : ''}>per vehicle</option>
+          <option value="per_hour" ${o.price_unit === 'per_hour' ? 'selected' : ''}>per hour</option>
+          <option value="per_day" ${o.price_unit === 'per_day' ? 'selected' : ''}>per day</option>
+          <option value="quote" ${o.price_unit === 'quote' ? 'selected' : ''}>personal quote</option>
+        </select>
+      </label>
+      <label class="opt-field">Child price<input class="opt-child" type="number" min="0" step="0.01" value="${o.child_price || ''}" placeholder="0.00"></label>
+      <label class="opt-field">Min people<input class="opt-min" type="number" min="1" step="1" value="${o.min_people ?? ''}" placeholder="1"></label>
+      <label class="opt-field">Max people<input class="opt-max" type="number" min="1" step="1" value="${o.max_people ?? ''}" placeholder="∞"></label>
+    </div>
+    <div class="opt-row-line3">
+      <label class="opt-field">Downpayment %<input class="opt-dp-pct" type="number" min="0" step="0.01" value="${o.downpayment_percent || ''}" placeholder="0"></label>
+      <label class="opt-field">Downpayment $<input class="opt-dp-fix" type="number" min="0" step="0.01" value="${o.downpayment_fixed || ''}" placeholder="0"></label>
+      <label class="opt-field mini-check"><input type="checkbox" class="opt-dp-pp" ${o.downpayment_per_person ? 'checked' : ''}> $ is per person</label>
+      <input class="opt-notes" placeholder="Notes for this option…" value="${esc(o.notes || '')}">
+    </div>
+  </div>`;
+}
+
+function serviceCardBody(s) {
+  return `
+    <div class="svc-card-body">
+      <div class="svc-vendor-grid">
+        <label>Category<input class="sf-category" value="${esc(s.category)}" list="category-list"></label>
+        <label>Wix form name<input class="sf-wix" value="${esc(s.wix_form_name)}" placeholder="Exact name on your website form"></label>
+        <label>Company / Provider<input class="sf-company" value="${esc(s.company)}"></label>
+        <label>Contact<input class="sf-contact" value="${esc(s.contact)}" placeholder="Phone / email"></label>
+        <label>Booking method<input class="sf-booking" value="${esc(s.booking_method)}" list="booking-method-list"></label>
+        <label>Info needed to book<input class="sf-info" value="${esc(s.info_needed)}" placeholder="e.g. Date, People, Timing"></label>
+        <label>Commission<input class="sf-commission" value="${esc(s.commission)}" placeholder="e.g. 15% or $20/booking"></label>
+        <label>Internal notes<input class="sf-internal" value="${esc(s.internal_notes)}" placeholder="Vendor-only notes"></label>
+      </div>
+
+      <h4>Pricing options</h4>
+      <div class="opt-rows">${s.options.map((o, i) => optionEditRow(o, i)).join('')}</div>
+      <button type="button" class="btn btn-sm opt-add">+ Add option</button>
+
+      <div class="svc-card-actions">
+        <button type="button" class="btn btn-primary btn-sm svc-save">Save changes</button>
+        <button type="button" class="btn btn-danger btn-sm svc-delete">Delete service</button>
+        <span class="send-status svc-save-status"></span>
+      </div>
+    </div>`;
+}
+
+let allServices = [];
+
 async function loadServices() {
   const q = $('#service-search').value;
-  const rows = await api('/services' + (q ? '?q=' + encodeURIComponent(q) : ''));
+  allServices = await api('/services' + (q ? '?q=' + encodeURIComponent(q) : ''));
 
-  // populate the category datalist for the add/edit form
-  const cats = [...new Set(rows.map((r) => r.category).filter(Boolean))].sort();
-  document.getElementById('category-list').innerHTML = cats.map((c) => `<option value="${esc(c)}">`).join('');
+  const cats = [...new Set(allServices.map((r) => r.category).filter(Boolean))].sort();
+  $('#category-list').innerHTML = cats.map((c) => `<option value="${esc(c)}">`).join('');
 
-  if (!rows.length) {
+  if (!allServices.length) {
     $('#service-groups').innerHTML = `<div class="empty">No services yet. Click “+ Add service” to build your info book — pricing, timings, commissions, everything in one place.</div>`;
     return;
   }
 
   const byCategory = new Map();
-  for (const s of rows) {
+  for (const s of allServices) {
     const cat = s.category || 'Uncategorized';
     if (!byCategory.has(cat)) byCategory.set(cat, []);
     byCategory.get(cat).push(s);
   }
 
   $('#service-groups').innerHTML = [...byCategory.entries()].map(([cat, items]) => {
-    const byCompany = new Map();
-    for (const s of items) {
-      const co = s.company || '—';
-      if (!byCompany.has(co)) byCompany.set(co, []);
-      byCompany.get(co).push(s);
-    }
     const collapsed = collapsedCategories.has(cat);
     return `
     <div class="svc-category ${collapsed ? 'collapsed' : ''}" data-cat="${esc(cat)}">
       <div class="svc-category-head">
         <h3>${esc(cat)}</h3>
-        <span class="count">${items.length} option${items.length === 1 ? '' : 's'}</span>
+        <span class="count">${items.length} service${items.length === 1 ? '' : 's'}</span>
         <span class="chev">▾</span>
       </div>
-      ${[...byCompany.entries()].map(([co, svcs]) => `
-        <div class="svc-company-group">
-          ${co !== '—' ? `<div class="svc-company-name">${esc(co)}</div>` : ''}
-          ${svcs.map(serviceRowCard).join('')}
-        </div>`).join('')}
+      <div class="svc-category-items">${items.map(serviceCard).join('')}</div>
     </div>`;
   }).join('');
 
@@ -429,8 +505,81 @@ async function loadServices() {
       localStorage.setItem('aqualux_collapsed_cats', JSON.stringify([...collapsedCategories]));
     }));
 
-  document.querySelectorAll('.svc-row-card').forEach((el) =>
-    el.addEventListener('click', () => openServiceModal(rows.find((r) => r.id === Number(el.dataset.service)))));
+  bindServiceCardEvents();
+}
+
+function bindServiceCardEvents() {
+  document.querySelectorAll('.svc-card-head[data-toggle]').forEach((el) =>
+    el.addEventListener('click', () => {
+      const id = Number(el.dataset.toggle);
+      if (expandedServices.has(id)) expandedServices.delete(id);
+      else expandedServices.add(id);
+      loadServices();
+    }));
+
+  document.querySelectorAll('.opt-add').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      const rows = btn.closest('.svc-card-body').querySelector('.opt-rows');
+      rows.insertAdjacentHTML('beforeend', optionEditRow({}, rows.children.length));
+      bindOptionRowEvents(rows);
+    }));
+
+  document.querySelectorAll('.opt-rows').forEach(bindOptionRowEvents);
+
+  document.querySelectorAll('.svc-save').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      const card = btn.closest('.svc-card');
+      const id = card.dataset.service;
+      const body = card.querySelector('.svc-card-body');
+      const options = [...body.querySelectorAll('.opt-row')].map((row) => ({
+        option_name: row.querySelector('.opt-name').value,
+        timing: row.querySelector('.opt-timing').value,
+        price: row.querySelector('.opt-price').value,
+        price_unit: row.querySelector('.opt-unit').value,
+        child_price: row.querySelector('.opt-child').value,
+        min_people: row.querySelector('.opt-min').value,
+        max_people: row.querySelector('.opt-max').value,
+        downpayment_percent: row.querySelector('.opt-dp-pct').value,
+        downpayment_fixed: row.querySelector('.opt-dp-fix').value,
+        downpayment_per_person: row.querySelector('.opt-dp-pp').checked,
+        notes: row.querySelector('.opt-notes').value
+      }));
+      const status = card.querySelector('.svc-save-status');
+      status.textContent = 'Saving…';
+      await api('/services/' + id, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          category: body.querySelector('.sf-category').value,
+          wix_form_name: body.querySelector('.sf-wix').value,
+          company: body.querySelector('.sf-company').value,
+          contact: body.querySelector('.sf-contact').value,
+          booking_method: body.querySelector('.sf-booking').value,
+          info_needed: body.querySelector('.sf-info').value,
+          commission: body.querySelector('.sf-commission').value,
+          internal_notes: body.querySelector('.sf-internal').value,
+          options
+        })
+      });
+      loadServices();
+    }));
+
+  document.querySelectorAll('.svc-delete').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      const card = btn.closest('.svc-card');
+      const id = card.dataset.service;
+      if (!confirm('Delete this service and all its pricing options?')) return;
+      await api('/services/' + id, { method: 'DELETE' });
+      expandedServices.delete(Number(id));
+      loadServices();
+    }));
+}
+
+function bindOptionRowEvents(rows) {
+  rows.querySelectorAll('.opt-del').forEach((btn) => {
+    if (btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => btn.closest('.opt-row').remove());
+  });
 }
 
 let serviceSearchTimer;
@@ -438,22 +587,11 @@ $('#service-search').addEventListener('input', () => {
   clearTimeout(serviceSearchTimer); serviceSearchTimer = setTimeout(loadServices, 250);
 });
 
-function openServiceModal(service = null) {
-  const form = $('#service-form');
-  form.reset();
-  $('#service-modal-title').textContent = service ? 'Edit service' : 'Add service';
-  $('#service-delete').classList.toggle('hidden', !service);
-  form.id.value = service?.id || '';
-  if (service) {
-    for (const [k, v] of Object.entries(service)) {
-      if (form.elements[k] && v !== null) form.elements[k].value = v;
-    }
-  }
+$('#btn-add-service').addEventListener('click', () => {
+  $('#service-form').reset();
   $('#service-modal-backdrop').classList.remove('hidden');
-  form.category.focus();
-}
-
-$('#btn-add-service').addEventListener('click', () => openServiceModal());
+  $('#service-form [name=category]').focus();
+});
 $('#service-cancel').addEventListener('click', () => $('#service-modal-backdrop').classList.add('hidden'));
 $('#service-modal-backdrop').addEventListener('click', (e) => {
   if (e.target === $('#service-modal-backdrop')) $('#service-modal-backdrop').classList.add('hidden');
@@ -461,21 +599,10 @@ $('#service-modal-backdrop').addEventListener('click', (e) => {
 
 $('#service-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const fd = new FormData(e.target);
-  const id = fd.get('id');
-  const body = Object.fromEntries(fd.entries());
-  delete body.id;
-  if (id) await api('/services/' + id, { method: 'PATCH', body: JSON.stringify(body) });
-  else await api('/services', { method: 'POST', body: JSON.stringify(body) });
+  const body = Object.fromEntries(new FormData(e.target).entries());
+  const created = await api('/services', { method: 'POST', body: JSON.stringify(body) });
   $('#service-modal-backdrop').classList.add('hidden');
-  loadServices();
-});
-
-$('#service-delete').addEventListener('click', async () => {
-  const id = $('#service-form').id.value;
-  if (!id || !confirm('Delete this service?')) return;
-  await api('/services/' + id, { method: 'DELETE' });
-  $('#service-modal-backdrop').classList.add('hidden');
+  expandedServices.add(created.id);
   loadServices();
 });
 

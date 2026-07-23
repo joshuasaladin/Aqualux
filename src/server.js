@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { db, touchLead, upsertClient, setSetting, getSetting, markThreadProcessed, LEAD_ORDER } from './db.js';
 import * as gmail from './gmail.js';
+import { SERVICE_CATALOG } from './services-catalog.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -338,35 +339,69 @@ app.delete('/api/payments/:id', (req, res) => {
 });
 
 // --------------------------------------------------------- services book --
+const OPTION_UNITS = ['flat_total', 'per_person', 'per_vehicle', 'per_hour', 'per_day', 'quote'];
+
+function getServiceFull(id) {
+  const svc = db.prepare(`SELECT * FROM services WHERE id = ?`).get(id);
+  if (!svc) return null;
+  svc.options = db.prepare(`
+    SELECT * FROM service_options WHERE service_id = ? ORDER BY sort_order, id`).all(id);
+  return svc;
+}
+
+function saveOptions(serviceId, options) {
+  db.prepare(`DELETE FROM service_options WHERE service_id = ?`).run(serviceId);
+  if (!Array.isArray(options)) return;
+  const ins = db.prepare(`
+    INSERT INTO service_options (service_id, option_name, price, price_unit, child_price,
+      min_people, max_people, downpayment_percent, downpayment_fixed, downpayment_per_person,
+      timing, notes, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  options.forEach((o, i) => {
+    if (!o) return;
+    if (!o.option_name && !o.price && !o.notes) return; // skip fully-blank rows
+    ins.run(serviceId, String(o.option_name || '').slice(0, 200),
+      Number(o.price) || 0, OPTION_UNITS.includes(o.price_unit) ? o.price_unit : 'per_person',
+      Number(o.child_price) || 0,
+      o.min_people ? parseInt(o.min_people, 10) : null, o.max_people ? parseInt(o.max_people, 10) : null,
+      Number(o.downpayment_percent) || 0, Number(o.downpayment_fixed) || 0, o.downpayment_per_person ? 1 : 0,
+      String(o.timing || '').slice(0, 200), String(o.notes || '').slice(0, 1000), i);
+  });
+}
+
 app.get('/api/services', (req, res) => {
   const q = req.query.q ? `%${req.query.q}%` : null;
-  const rows = db.prepare(`
+  const services = db.prepare(`
     SELECT * FROM services
-    ${q ? `WHERE category LIKE ? OR company LIKE ? OR service_name LIKE ? OR option_name LIKE ? OR notes LIKE ?` : ''}
-    ORDER BY category, company, service_name, sort_order, id`)
-    .all(...(q ? [q, q, q, q, q] : []));
-  res.json(rows);
+    ${q ? `WHERE category LIKE ? OR wix_form_name LIKE ? OR service_name LIKE ? OR company LIKE ?` : ''}
+    ORDER BY category, service_name, sort_order, id`)
+    .all(...(q ? [q, q, q, q] : []));
+  const opts = db.prepare(`SELECT * FROM service_options ORDER BY sort_order, id`).all();
+  const byService = new Map();
+  for (const o of opts) {
+    if (!byService.has(o.service_id)) byService.set(o.service_id, []);
+    byService.get(o.service_id).push(o);
+  }
+  for (const s of services) s.options = byService.get(s.id) || [];
+  res.json(services);
 });
 
 app.post('/api/services', (req, res) => {
   const b = req.body || {};
   if (!b.service_name?.trim()) return res.status(400).json({ error: 'Service name is required' });
   const info = db.prepare(`
-    INSERT INTO services (category, company, service_name, option_name, price, price_unit,
-      child_price, min_people, max_people, downpayment_type, downpayment_value,
-      timing, commission, communication_method, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    INSERT INTO services (category, wix_form_name, service_name, company, contact,
+      booking_method, info_needed, commission, internal_notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(
-      String(b.category || '').trim(), String(b.company || '').trim(),
-      String(b.service_name || '').trim(), String(b.option_name || '').trim(),
-      Number(b.price) || 0, ['per_person', 'per_hour', 'flat_total'].includes(b.price_unit) ? b.price_unit : 'per_person',
-      Number(b.child_price) || 0, b.min_people ? parseInt(b.min_people, 10) : null,
-      b.max_people ? parseInt(b.max_people, 10) : null,
-      b.downpayment_type === 'fixed' ? 'fixed' : 'percent', Number(b.downpayment_value) || 0,
-      String(b.timing || '').trim(), String(b.commission || '').trim(),
-      String(b.communication_method || '').trim(), String(b.notes || '').trim()
+      String(b.category || '').trim(), String(b.wix_form_name || '').trim(),
+      String(b.service_name || '').trim(), String(b.company || '').trim(),
+      String(b.contact || '').trim(), String(b.booking_method || '').trim(),
+      String(b.info_needed || '').trim(), String(b.commission || '').trim(),
+      String(b.internal_notes || '').trim()
     );
-  res.status(201).json(db.prepare(`SELECT * FROM services WHERE id = ?`).get(info.lastInsertRowid));
+  if (Array.isArray(b.options)) saveOptions(info.lastInsertRowid, b.options);
+  res.status(201).json(getServiceFull(info.lastInsertRowid));
 });
 
 app.patch('/api/services/:id', (req, res) => {
@@ -374,29 +409,24 @@ app.patch('/api/services/:id', (req, res) => {
   if (!svc) return res.status(404).json({ error: 'Not found' });
   const b = req.body || {};
   const fields = {
-    category: b.category, company: b.company, service_name: b.service_name, option_name: b.option_name,
-    price: b.price !== undefined ? Number(b.price) || 0 : undefined,
-    price_unit: ['per_person', 'per_hour', 'flat_total'].includes(b.price_unit) ? b.price_unit : undefined,
-    child_price: b.child_price !== undefined ? Number(b.child_price) || 0 : undefined,
-    min_people: b.min_people !== undefined ? (b.min_people ? parseInt(b.min_people, 10) : null) : undefined,
-    max_people: b.max_people !== undefined ? (b.max_people ? parseInt(b.max_people, 10) : null) : undefined,
-    downpayment_type: b.downpayment_type === 'fixed' || b.downpayment_type === 'percent' ? b.downpayment_type : undefined,
-    downpayment_value: b.downpayment_value !== undefined ? Number(b.downpayment_value) || 0 : undefined,
-    timing: b.timing, commission: b.commission, communication_method: b.communication_method, notes: b.notes
+    category: b.category, wix_form_name: b.wix_form_name, service_name: b.service_name,
+    company: b.company, contact: b.contact, booking_method: b.booking_method,
+    info_needed: b.info_needed, commission: b.commission, internal_notes: b.internal_notes
   };
   const sets = [];
   const params = [];
   for (const [k, v] of Object.entries(fields)) {
     if (v === undefined) continue;
     sets.push(`${k} = ?`);
-    params.push(typeof v === 'string' ? v.trim() : v);
+    params.push(String(v).trim());
   }
   if (sets.length) {
     sets.push(`updated_at = datetime('now')`);
     params.push(req.params.id);
     db.prepare(`UPDATE services SET ${sets.join(', ')} WHERE id = ?`).run(...params);
   }
-  res.json(db.prepare(`SELECT * FROM services WHERE id = ?`).get(req.params.id));
+  if (Array.isArray(b.options)) saveOptions(req.params.id, b.options);
+  res.json(getServiceFull(req.params.id));
 });
 
 app.delete('/api/services/:id', (req, res) => {
@@ -460,6 +490,31 @@ const PORT = process.env.PORT || 3000;
 if (process.env.DEMO === '1') {
   const { seedDemo } = await import('./seed.js');
   seedDemo();
+}
+
+// One-time seed: populate the Services book from the bundled catalog, but
+// only if it's currently empty — never overwrites services you've since
+// added or edited by hand.
+if (db.prepare(`SELECT COUNT(*) n FROM services`).get().n === 0 && SERVICE_CATALOG.length) {
+  const insSvc = db.prepare(`
+    INSERT INTO services (category, wix_form_name, service_name, company, contact,
+      booking_method, info_needed, internal_notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+  const insOpt = db.prepare(`
+    INSERT INTO service_options (service_id, option_name, price, price_unit, child_price,
+      min_people, max_people, downpayment_percent, downpayment_fixed, downpayment_per_person,
+      timing, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  for (const s of SERVICE_CATALOG) {
+    const info = insSvc.run(s.category, s.wix_form_name, s.service_name, s.company,
+      s.contact, s.booking_method, s.info_needed, s.internal_notes);
+    for (const o of s.options) {
+      insOpt.run(info.lastInsertRowid, o.option_name, o.price, o.price_unit, o.child_price,
+        o.min_people, o.max_people, o.downpayment_percent, o.downpayment_fixed,
+        o.downpayment_per_person ? 1 : 0, o.timing, o.notes);
+    }
+  }
+  console.log(`Seeded Services book: ${SERVICE_CATALOG.length} services, ${SERVICE_CATALOG.reduce((a, s) => a + s.options.length, 0)} pricing options.`);
 }
 
 // One-time cleanup: remove leads/clients mistakenly created from payment-
