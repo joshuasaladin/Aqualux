@@ -14,9 +14,11 @@ const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly https://www.googl
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 
 // Bulk/marketing sender addresses — never real people.
-const SKIP_SENDERS = /no-?reply|donotreply|mailer-daemon|notifications?@|newsletter|marketing@|promo(?:tions?)?@|offers?@|deals@|@e?mail\.|@e\./i;
+const SKIP_SENDERS = /no[-._]?reply|donotreply|mailer-daemon|notifications?@|newsletter|marketing@|promo(?:tions?)?@|offers?@|deals@|@e?mail\.|@e\./i;
 // Gmail's own categorization: promotions/social/spam are not leads.
 const SKIP_LABELS = new Set(['CATEGORY_PROMOTIONS', 'CATEGORY_SOCIAL', 'SPAM']);
+// Payment services whose notification emails go to the Payments tab.
+const PAYMENT_SENDERS = /venmo\.com|zelle|chase\.com|paypal\.com|cash\.app|square(?:up)?\.com|wellsfargo|bankofamerica|citi(?:bank)?\.com|wise\.com|revolut\.com/i;
 
 export function getCredentials() {
   const stored = getSetting('gmail_credentials', {});
@@ -185,6 +187,11 @@ export function parseFormSubmission(from, bodyText) {
     /submitted your form|submission summary/i.test(bodyText);
   if (!looksLikeForm) return null;
 
+  // Drop the Wix notification footer (tracking links) before parsing.
+  bodyText = bodyText
+    .replace(/\s*Click on the link below[\s\S]*$/i, '')
+    .replace(/\s*This email was sent as a notification[\s\S]*$/i, '');
+
   const formName = bodyText.match(/submitted your form\s+["“]?(.+?)["”]?\s+on\s/i)?.[1]?.trim() || '';
 
   // Collect "Label:" -> value pairs ("Label:\nvalue" or "Label: value")
@@ -252,6 +259,46 @@ export function parseFormSubmission(from, bodyText) {
   };
 }
 
+// ------------------------------------------------ payment notifications ---
+/**
+ * Venmo / Zelle / Chase / PayPal etc. notification emails become entries in
+ * the Payments tab instead of leads.
+ */
+export function parsePaymentNotification(from, subject, body) {
+  if (!PAYMENT_SENDERS.test(from.email)) return null;
+  const text = subject + '\n' + body;
+  // Only money-received notifications — not statements, ads, or login alerts.
+  if (!/paid you|sent you|received (?:money|a payment|\$)|you received|payment received|deposited/i.test(text)) return null;
+
+  const amount = Number((subject.match(/\$\s?([\d,]+(?:\.\d{1,2})?)/) ||
+                         body.match(/\$\s?([\d,]+(?:\.\d{1,2})?)/) || [])[1]?.replace(/,/g, '')) || 0;
+
+  let payer =
+    subject.match(/^(.{2,50}?)\s+(?:paid|sent)\s+you/i)?.[1] ||
+    body.match(/^(.{2,50}?)\s+(?:paid|sent)\s+you/im)?.[1] ||
+    text.match(/(?:from|received money from)\s+([A-Z][\w .'-]{2,40}?)(?:\s+(?:is|has|on|for|via|with)\b|[.,!\n]|$)/m)?.[1] ||
+    '';
+  payer = payer.trim();
+
+  let source = 'Bank';
+  if (/venmo/i.test(from.email)) source = 'Venmo';
+  else if (/zelle/i.test(text) || /zelle/i.test(from.email)) source = 'Zelle';
+  else if (/paypal/i.test(from.email)) source = 'PayPal';
+  else if (/cash\.app|squareup/i.test(from.email)) source = 'Cash App';
+  else if (/chase/i.test(from.email)) source = 'Chase';
+  else if (/wise\.com/i.test(from.email)) source = 'Wise';
+
+  return { source, payer, amount };
+}
+
+function recordPayment(pay, msg, subject, body) {
+  db.prepare(`
+    INSERT OR IGNORE INTO payments (gmail_message_id, source, payer, amount, subject, body, received_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run(msg.id, pay.source, pay.payer, pay.amount, subject,
+         body.slice(0, 2000), new Date(Number(msg.internalDate)).toISOString());
+}
+
 function createLeadFromForm(form, msg) {
   const client = upsertClient({ name: form.name, email: form.email, phone: form.phone });
   const info = db.prepare(`
@@ -278,7 +325,7 @@ export async function syncNow() {
   try {
     const myEmail = (getSetting('gmail_email') || '').toLowerCase();
     const since = getSetting('gmail_sync_since') || Math.floor(Date.now() / 1000);
-    let created = 0, updated = 0;
+    let created = 0, updated = 0, payments = 0;
 
     // 1. New inbox threads -> new leads
     const list = await apiGet(`/threads?q=${encodeURIComponent(`in:inbox after:${since}`)}&maxResults=50`);
@@ -291,8 +338,11 @@ export async function syncNow() {
       const from = parseFrom(header(first, 'From'));
       if (!from.email || from.email === myEmail) { markThreadProcessed(t.id); continue; }
 
+      const bodyText = extractText(first.payload) || first.snippet || '';
+      const subject = header(first, 'Subject') || '(no subject)';
+
       // Website form notification? Lead belongs to the visitor, not the form service.
-      const form = parseFormSubmission(from, extractText(first.payload) || first.snippet || '');
+      const form = parseFormSubmission(from, bodyText);
       if (form) {
         createLeadFromForm(form, first);
         markThreadProcessed(t.id);
@@ -300,11 +350,19 @@ export async function syncNow() {
         continue;
       }
 
+      // Payment notification (Venmo / Zelle / Chase / …) -> Payments tab.
+      const pay = parsePaymentNotification(from, subject, bodyText);
+      if (pay) {
+        recordPayment(pay, first, subject, bodyText);
+        markThreadProcessed(t.id);
+        payments++;
+        continue;
+      }
+
       // Bulk / promotional mail is not a lead.
       if (isBulkMail(first, from)) { markThreadProcessed(t.id); continue; }
 
       const client = upsertClient({ name: from.name, email: from.email });
-      const subject = header(first, 'Subject') || '(no subject)';
       const info = db.prepare(`
         INSERT INTO leads (client_id, gmail_thread_id, subject, service)
         VALUES (?, ?, ?, ?)`).run(client.id, t.id, subject, subject);
@@ -327,7 +385,7 @@ export async function syncNow() {
 
     setSetting('gmail_last_sync', new Date().toISOString());
     setSetting('gmail_last_sync_error', null);
-    return { created, updated };
+    return { created, updated, payments };
   } catch (err) {
     setSetting('gmail_last_sync_error', String(err.message || err));
     throw err;

@@ -68,6 +68,18 @@ db.exec(`
     thread_id TEXT PRIMARY KEY
   );
 
+  -- Incoming payment notifications (Venmo, Zelle, Chase, PayPal, ...)
+  CREATE TABLE IF NOT EXISTS payments (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    gmail_message_id TEXT UNIQUE,
+    source           TEXT DEFAULT '',
+    payer            TEXT DEFAULT '',
+    amount           REAL DEFAULT 0,
+    subject          TEXT DEFAULT '',
+    body             TEXT DEFAULT '',
+    received_at      TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
@@ -87,6 +99,22 @@ function ensureColumn(table, col, ddl) {
 }
 ensureColumn('leads', 'party_size', 'party_size INTEGER');
 ensureColumn('leads', 'source', `source TEXT NOT NULL DEFAULT 'email'`);
+
+// One-time cleanup: strip Wix tracking-link footers from already-imported
+// form messages ("Click on the link below…" / "This email was sent as a…").
+{
+  const dirty = db.prepare(`
+    SELECT id, body FROM messages
+    WHERE body LIKE '%Click on the link below%' OR body LIKE '%sent as a notification%'`).all();
+  const upd = db.prepare(`UPDATE messages SET body = ? WHERE id = ?`);
+  for (const m of dirty) {
+    const clean = m.body
+      .replace(/\s*Click on the link below[\s\S]*$/i, '')
+      .replace(/\s*This email was sent as a notification[\s\S]*$/i, '')
+      .trimEnd();
+    if (clean !== m.body) upd.run(clean, m.id);
+  }
+}
 
 export function markThreadProcessed(threadId) {
   if (!threadId) return;

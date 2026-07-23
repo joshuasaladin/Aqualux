@@ -242,6 +242,23 @@ app.post('/api/leads/:id/reply', async (req, res) => {
   }
 });
 
+// ------------------------------------------------------------ payments ----
+app.get('/api/payments', (req, res) => {
+  const rows = db.prepare(`
+    SELECT * FROM payments ORDER BY received_at DESC LIMIT 500`).all();
+  const totals = db.prepare(`
+    SELECT COALESCE(SUM(amount), 0) AS all_time,
+           COALESCE(SUM(CASE WHEN received_at >= date('now', 'start of month') THEN amount ELSE 0 END), 0) AS this_month,
+           COALESCE(SUM(CASE WHEN received_at >= date('now', '-7 days') THEN amount ELSE 0 END), 0) AS this_week
+    FROM payments`).get();
+  res.json({ totals, payments: rows });
+});
+
+app.delete('/api/payments/:id', (req, res) => {
+  db.prepare(`DELETE FROM payments WHERE id = ?`).run(req.params.id);
+  res.json({ ok: true });
+});
+
 // ------------------------------------------------------------ calendar ----
 // Confirmed bookings within a date range, for the calendar tab.
 app.get('/api/calendar', (req, res) => {

@@ -100,6 +100,7 @@ function showView(name) {
   if (name === 'leads') loadLeads();
   if (name === 'confirmed') loadConfirmed();
   if (name === 'calendar') renderCalendar();
+  if (name === 'payments') loadPayments();
   if (name === 'clients') loadClients();
   if (name === 'settings') loadSettings();
 }
@@ -220,6 +221,41 @@ $('#cal-next').addEventListener('click', () => {
   calMonth++; if (calMonth > 11) { calMonth = 0; calYear++; }
   renderCalendar();
 });
+
+/* ----------------------------------------------------------- payments --- */
+const SOURCE_ICONS = { Venmo: '💙', Zelle: '💜', Chase: '🏦', PayPal: '🅿️', 'Cash App': '💵', Wise: '🌍', Bank: '🏦' };
+
+async function loadPayments() {
+  const { totals, payments } = await api('/payments');
+  $('#pay-stats').innerHTML = `
+    <div class="stat"><div class="num green">${money(totals.this_week)}</div><div class="label">Last 7 days</div></div>
+    <div class="stat"><div class="num green">${money(totals.this_month)}</div><div class="label">This month</div></div>
+    <div class="stat"><div class="num">${money(totals.all_time)}</div><div class="label">All time</div></div>
+    <div class="stat"><div class="num">${payments.length}</div><div class="label">Payments</div></div>`;
+  $('#payment-list').innerHTML = payments.length
+    ? payments.map((p) => `
+      <div class="card pay-card" data-pay="${p.id}">
+        <div class="card-top">
+          <span class="card-title">${SOURCE_ICONS[p.source] || '💳'} ${esc(p.payer || p.source)}</span>
+          <span class="badge pay-paid">${esc(p.source)}</span>
+          <span class="card-right">
+            <span class="card-amount pay-amount">+${money(p.amount)}</span>
+            <span class="card-sub">${timeAgo(p.received_at)}</span>
+            <button class="btn btn-sm btn-danger pay-del" title="Remove">×</button>
+          </span>
+        </div>
+        <div class="card-sub">${esc(p.subject)}</div>
+      </div>`).join('')
+    : `<div class="empty">No payments yet. When Venmo, Zelle or your bank emails you a “you received money” notification, it appears here.</div>`;
+  document.querySelectorAll('#payment-list .pay-del').forEach((btn) =>
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = btn.closest('[data-pay]').dataset.pay;
+      if (!confirm('Remove this payment from the list?')) return;
+      await api('/payments/' + id, { method: 'DELETE' });
+      loadPayments();
+    }));
+}
 
 /* ------------------------------------------------------------ clients --- */
 async function loadClients() {
@@ -510,6 +546,9 @@ async function loadSettings() {
       <li>Create an <b>OAuth client ID</b> → type <b>Web application</b> → add this exact redirect URI:<br>
         <code>${esc(s.redirect_uri)}</code></li>
       <li>Copy the Client ID and Client Secret below, then click Connect.</li>
+      <li><b>To stay connected permanently:</b> in Google Console → <a href="https://console.cloud.google.com/auth/audience" target="_blank">Audience</a>,
+        click <b>Publish app</b>. While the app is in "Testing" mode, Google cuts the
+        connection every 7 days; published apps stay connected.</li>
     </ol>
     <div class="form-row">
       <label>Client ID<input id="s-client-id" placeholder="xxxxxxxx.apps.googleusercontent.com"></label>

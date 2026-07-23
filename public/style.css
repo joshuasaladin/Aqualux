@@ -186,6 +186,8 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--aqua); outl
 .svc-totals .ok { color: var(--green); }
 .svc-totals .due { color: var(--red); }
 .owed { font-size: .8rem; color: var(--amber); font-weight: 600; }
+.pay-card { cursor: default; }
+.pay-amount { color: var(--green); }
 
 /* ------------------------------------------------------------ calendar --- */
 .cal-header { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }

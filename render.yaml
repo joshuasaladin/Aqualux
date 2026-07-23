@@ -1,0 +1,21 @@
+# Render blueprint for Aqualux CRM.
+# The persistent disk is essential: it keeps the database (leads, clients,
+# payments, AND the Gmail connection tokens) across restarts and deploys.
+# Persistent disks require a paid instance (Starter) — on the free tier the
+# disk is wiped on every restart, which disconnects Gmail and erases leads.
+services:
+  - type: web
+    name: aqualux-crm
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    disk:
+      name: aqualux-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DATA_DIR
+        value: /data
+      - key: ADMIN_PASSWORD
+        sync: false

@@ -28,6 +28,7 @@
       <button class="nav-btn active" data-view="leads">Leads</button>
       <button class="nav-btn" data-view="confirmed">Confirmed</button>
       <button class="nav-btn" data-view="calendar">Calendar</button>
+      <button class="nav-btn" data-view="payments">Payments</button>
       <button class="nav-btn" data-view="clients">Clients</button>
       <button class="nav-btn" data-view="settings">Settings <span id="gmail-dot" class="dot dot-off" title="Gmail not connected"></span></button>
     </nav>
@@ -63,6 +64,14 @@
       </div>
       <div class="cal-grid" id="cal-grid"></div>
       <p class="cal-hint">Shows bookings that are marked <b>Confirmed</b> and have a service date.</p>
+    </section>
+
+    <!-- ============================ PAYMENTS ============================= -->
+    <section id="view-payments" class="view hidden">
+      <div class="stat-grid" id="pay-stats"></div>
+      <h2>Payments received</h2>
+      <div id="payment-list" class="card-list"></div>
+      <p class="cal-hint">Money-received notifications from Venmo, Zelle, Chase, PayPal and similar are collected here automatically.</p>
     </section>
 
     <!-- ============================ CLIENTS ============================== -->

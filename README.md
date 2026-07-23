@@ -67,8 +67,32 @@ revoke access anytime from your Google account.
 
 From then on the CRM checks for new mail every ~3 minutes (there's also a
 manual "Sync Gmail" button). Only emails received **after** connecting become
-leads; "Import last 7 days" in Settings reaches further back. Obvious
-no-reply/newsletter senders are skipped.
+leads; "Import last 7 days" in Settings reaches further back.
+
+What gets filtered automatically:
+
+- **Bulk/marketing mail is skipped** — Gmail's Promotions/Social/Spam
+  categories, anything with an unsubscribe header, and no-reply senders.
+- **Website form notifications (Wix etc.) are parsed** — the lead is created
+  for the actual visitor (name, email, phone, party size, date, questions),
+  not the form service; tracking-link footers are stripped.
+- **Payment notifications (Venmo, Zelle, Chase, PayPal, Cash App, …)** go to
+  the **Payments tab** with payer, amount, and weekly/monthly totals.
+
+### Staying connected permanently
+
+Two things make the Gmail connection survive forever:
+
+1. **Publish your Google app.** In Google Console → **Audience** → click
+   **Publish app**. While the app is in "Testing" mode Google expires the
+   connection every 7 days; published apps stay connected indefinitely.
+   (You'll see an "unverified app" warning once when connecting — click
+   Advanced → Continue. It's your own app.)
+2. **Host with a persistent disk.** The database stores the connection
+   tokens and all your leads. On hosts that wipe the disk on restart
+   (Render's free tier), everything resets. The included `render.yaml`
+   configures a Render **Starter** instance with a 1 GB disk mounted at
+   `/data` — deploys and restarts then keep all data and the connection.
 
 Credentials can also come from env vars: `GOOGLE_CLIENT_ID`,
 `GOOGLE_CLIENT_SECRET`. Set `BASE_URL` (e.g. `https://aqualux-crm.onrender.com`)
