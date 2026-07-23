@@ -138,9 +138,13 @@ function bindLeadCards(container) {
 
 let leadTimer;
 async function loadLeads() {
+  const params = new URLSearchParams();
+  if ($('#lead-search').value) params.set('q', $('#lead-search').value);
+  const sort = $('#lead-sort').value;
+  if (sort && sort !== 'date') params.set('sort', sort);
   const [summary, rows] = await Promise.all([
     api('/leads/summary'),
-    api('/leads' + ($('#lead-search').value ? '?q=' + encodeURIComponent($('#lead-search').value) : ''))
+    api('/leads' + (params.size ? '?' + params : ''))
   ]);
   $('#stat-grid').innerHTML = `
     <div class="stat"><div class="num green">${summary.needs_reply || 0}</div><div class="label">Waiting on your reply</div></div>
@@ -155,6 +159,13 @@ async function loadLeads() {
 
 $('#lead-search').addEventListener('input', () => {
   clearTimeout(leadTimer); leadTimer = setTimeout(loadLeads, 250);
+});
+
+// remember the chosen sort order between visits
+$('#lead-sort').value = localStorage.getItem('aqualux_sort') || 'date';
+$('#lead-sort').addEventListener('change', () => {
+  localStorage.setItem('aqualux_sort', $('#lead-sort').value);
+  loadLeads();
 });
 
 $('#btn-sync').addEventListener('click', async () => {
@@ -347,8 +358,11 @@ async function openLead(id) {
       </div>
       <div class="reply-box">
         <textarea id="d-reply" placeholder="Write your reply — it sends from your Gmail…" ${canEmail ? '' : 'disabled'}></textarea>
+        <div id="d-file-list" class="file-list"></div>
         <div class="reply-actions">
           <button class="btn btn-primary" id="d-send" ${canEmail ? '' : 'disabled'}>Send reply ✉️</button>
+          <button class="btn" id="d-attach" ${canEmail ? '' : 'disabled'} title="Attach files">📎 Attach</button>
+          <input type="file" id="d-files" multiple hidden>
           <span class="send-status" id="d-send-status">${canEmail ? '' :
             'Connect Gmail in <a href="#" id="goto-settings">Settings</a> to send emails from here.'}</span>
         </div>
@@ -421,15 +435,55 @@ async function openLead(id) {
     refreshCurrentView();
   });
 
+  // --- attachments ---
+  let pendingFiles = [];
+  const MAX_TOTAL = 20 * 1024 * 1024;
+
+  function renderFileList() {
+    $('#d-file-list').innerHTML = pendingFiles.map((f, i) => `
+      <span class="file-chip">📎 ${esc(f.filename)}
+        <small>${(f.size / 1024 < 1000 ? (f.size / 1024).toFixed(0) + ' KB' : (f.size / 1048576).toFixed(1) + ' MB')}</small>
+        <button data-rm="${i}" title="Remove">×</button>
+      </span>`).join('');
+    $('#d-file-list').querySelectorAll('[data-rm]').forEach((b) =>
+      b.addEventListener('click', () => { pendingFiles.splice(Number(b.dataset.rm), 1); renderFileList(); }));
+  }
+
+  $('#d-attach')?.addEventListener('click', () => $('#d-files').click());
+  $('#d-files')?.addEventListener('change', async (e) => {
+    for (const file of e.target.files) {
+      const total = pendingFiles.reduce((a, f) => a + f.size, 0) + file.size;
+      if (total > MAX_TOTAL) {
+        alert(`"${file.name}" would push attachments over 20 MB — send it in a separate email.`);
+        continue;
+      }
+      const data = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result.split(',')[1]);
+        r.onerror = reject;
+        r.readAsDataURL(file);
+      });
+      pendingFiles.push({ filename: file.name, mimeType: file.type || 'application/octet-stream', size: file.size, data });
+    }
+    e.target.value = '';
+    renderFileList();
+  });
+
   $('#d-send').addEventListener('click', async () => {
     const body = $('#d-reply').value.trim();
-    if (!body) return;
+    if (!body && !pendingFiles.length) return;
     const st = $('#d-send-status');
     $('#d-send').disabled = true;
     st.classList.remove('err');
-    st.textContent = 'Sending…';
+    st.textContent = pendingFiles.length ? 'Sending with attachments…' : 'Sending…';
     try {
-      await api(`/leads/${id}/reply`, { method: 'POST', body: JSON.stringify({ body }) });
+      await api(`/leads/${id}/reply`, {
+        method: 'POST',
+        body: JSON.stringify({
+          body,
+          attachments: pendingFiles.map(({ filename, mimeType, data }) => ({ filename, mimeType, data }))
+        })
+      });
       openLead(id);
       refreshCurrentView();
     } catch (err) {

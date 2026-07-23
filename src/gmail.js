@@ -440,7 +440,36 @@ export function recomputeStatus(leadId) {
 }
 
 // --------------------------------------------------------------- send -----
-export async function sendReply(lead, client, bodyText) {
+/**
+ * Send a full RFC-822 message through Gmail's upload endpoint, which allows
+ * large bodies (attachments up to ~35 MB) unlike the plain JSON endpoint.
+ */
+async function apiSendRaw(rfc822, threadId) {
+  const token = await accessToken();
+  const boundary = 'upload_' + crypto.randomBytes(8).toString('hex');
+  const meta = JSON.stringify(threadId ? { threadId } : {});
+  const payload = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n` +
+                `--${boundary}\r\nContent-Type: message/rfc822\r\n\r\n`),
+    Buffer.from(rfc822),
+    Buffer.from(`\r\n--${boundary}--`)
+  ]);
+  const res = await fetch(
+    'https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=multipart', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': `multipart/related; boundary="${boundary}"`
+      },
+      body: payload
+    });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error?.message || `Gmail API error ${res.status}`);
+  return data;
+}
+
+/** attachments: [{ filename, mimeType, data }] where data is plain base64. */
+export async function sendReply(lead, client, bodyText, attachments = []) {
   const myEmail = getSetting('gmail_email');
   if (!myEmail) throw new Error('Gmail is not connected');
 
@@ -455,30 +484,51 @@ export async function sendReply(lead, client, bodyText) {
     `From: ${myEmail}`,
     `To: ${client.email}`,
     `Subject: ${subject.replace(/[\r\n]/g, ' ')}`,
-    'MIME-Version: 1.0',
-    'Content-Type: text/plain; charset="UTF-8"',
-    'Content-Transfer-Encoding: 7bit'
+    'MIME-Version: 1.0'
   ];
   // Only reference the previous email when replying inside a real Gmail
   // thread. Form leads have no client thread yet — the first reply starts one.
   if (lead.gmail_thread_id && lastIn?.rfc_message_id) {
     headers.push(`In-Reply-To: ${lastIn.rfc_message_id}`, `References: ${lastIn.rfc_message_id}`);
   }
-  const raw = Buffer.from(headers.join('\r\n') + '\r\n\r\n' + bodyText)
-    .toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
-  const payload = { raw };
-  if (lead.gmail_thread_id) payload.threadId = lead.gmail_thread_id;
-  const sent = await apiPost('/messages/send', payload);
+  let rfc822;
+  if (attachments.length) {
+    const boundary = 'aqualux_' + crypto.randomBytes(8).toString('hex');
+    headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+    const parts = [
+      `--${boundary}\r\nContent-Type: text/plain; charset="UTF-8"\r\n\r\n${bodyText}\r\n`
+    ];
+    for (const a of attachments) {
+      // fold base64 into 76-char lines per MIME spec
+      const folded = a.data.replace(/.{76}/g, '$&\r\n');
+      parts.push(
+        `--${boundary}\r\n` +
+        `Content-Type: ${a.mimeType}; name="${a.filename}"\r\n` +
+        `Content-Transfer-Encoding: base64\r\n` +
+        `Content-Disposition: attachment; filename="${a.filename}"\r\n\r\n` +
+        `${folded}\r\n`
+      );
+    }
+    parts.push(`--${boundary}--`);
+    rfc822 = headers.join('\r\n') + '\r\n\r\n' + parts.join('');
+  } else {
+    headers.push('Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: 7bit');
+    rfc822 = headers.join('\r\n') + '\r\n\r\n' + bodyText;
+  }
+
+  const sent = await apiSendRaw(rfc822, lead.gmail_thread_id || undefined);
 
   // Leads created manually or from the website form get a thread on first reply
   if (!lead.gmail_thread_id && sent.threadId) {
     db.prepare(`UPDATE leads SET gmail_thread_id = ? WHERE id = ?`).run(sent.threadId, lead.id);
   }
+  const storedBody = bodyText +
+    (attachments.length ? `\n\n📎 ${attachments.map((a) => a.filename).join(', ')}` : '');
   db.prepare(`
     INSERT INTO messages (lead_id, gmail_message_id, direction, from_email, subject, body, sent_at)
     VALUES (?, ?, 'out', ?, ?, ?, ?)`)
-    .run(lead.id, sent.id || null, myEmail, subject, bodyText, new Date().toISOString());
+    .run(lead.id, sent.id || null, myEmail, subject, storedBody, new Date().toISOString());
   recomputeStatus(lead.id);
   touchLead(lead.id);
   return sent;

@@ -169,6 +169,19 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--aqua); outl
 .reply-hint a { color: var(--aqua-dark); }
 .send-status { font-size: .82rem; color: var(--muted); }
 .send-status.err { color: var(--red); }
+.file-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.file-list:empty { display: none; }
+.file-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #fff; border: 1px solid var(--border); border-radius: 999px;
+  padding: 4px 10px; font-size: .8rem; color: var(--navy);
+}
+.file-chip small { color: var(--muted); }
+.file-chip button {
+  border: none; background: none; cursor: pointer; color: var(--muted);
+  font-size: .95rem; padding: 0 2px;
+}
+.file-chip button:hover { color: var(--red); }
 
 /* ------------------------------------------------------- services rows --- */
 .svc-head, .svc-row {

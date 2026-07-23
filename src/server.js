@@ -6,7 +6,8 @@ import * as gmail from './gmail.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
-app.use(express.json());
+// generous body limit so email replies can carry file attachments
+app.use(express.json({ limit: '30mb' }));
 
 // ---------------------------------------------------------------- auth ----
 // Set ADMIN_PASSWORD to protect the CRM. The public intake endpoint and the
@@ -128,7 +129,7 @@ const LEAD_SELECT = `
   ) s ON s.lead_id = l.id`;
 
 app.get('/api/leads', (req, res) => {
-  const { q, tab } = req.query;
+  const { q, tab, sort } = req.query;
   const where = [];
   const params = [];
   if (tab === 'confirmed') where.push('l.booking_confirmed = 1');
@@ -137,9 +138,14 @@ app.get('/api/leads', (req, res) => {
     const like = `%${q}%`;
     params.push(like, like, like, like);
   }
+  // 'newest' = most recent email/lead activity first; default = soonest
+  // service date first with paid+confirmed sinking to the bottom.
+  const order = sort === 'newest'
+    ? `ORDER BY COALESCE(l.last_msg_at, l.created_at) DESC`
+    : LEAD_ORDER;
   const rows = db.prepare(`${LEAD_SELECT}
     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-    ${LEAD_ORDER} LIMIT 500`).all(...params);
+    ${order} LIMIT 500`).all(...params);
   res.json(rows);
 });
 
@@ -229,13 +235,31 @@ app.delete('/api/leads/:id', (req, res) => {
 
 // --------------------------------------------------------------- reply ----
 app.post('/api/leads/:id/reply', async (req, res) => {
-  const { body } = req.body || {};
-  if (!body?.trim()) return res.status(400).json({ error: 'Message body is required' });
+  const { body, attachments = [] } = req.body || {};
+  if (!body?.trim() && !attachments.length) {
+    return res.status(400).json({ error: 'Message body is required' });
+  }
   const lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(req.params.id);
   if (!lead) return res.status(404).json({ error: 'Not found' });
   const client = db.prepare(`SELECT * FROM clients WHERE id = ?`).get(lead.client_id);
+
+  const files = [];
+  let totalBytes = 0;
+  for (const a of Array.isArray(attachments) ? attachments : []) {
+    if (!a?.filename || !a?.data) continue;
+    const size = Math.floor(a.data.length * 3 / 4);
+    totalBytes += size;
+    files.push({
+      filename: String(a.filename).replace(/[\r\n"]/g, '').slice(0, 200),
+      mimeType: /^[\w.+-]+\/[\w.+-]+$/.test(a.mimeType || '') ? a.mimeType : 'application/octet-stream',
+      data: a.data
+    });
+  }
+  if (totalBytes > 20 * 1024 * 1024) {
+    return res.status(400).json({ error: 'Attachments too large — keep the total under 20 MB' });
+  }
   try {
-    await gmail.sendReply(lead, client, body.trim());
+    await gmail.sendReply(lead, client, (body || '').trim(), files);
     res.json(getLeadFull(lead.id));
   } catch (err) {
     res.status(502).json({ error: err.message });
