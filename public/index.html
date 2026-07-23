@@ -29,7 +29,13 @@
       <button class="nav-btn" data-view="confirmed">Confirmed</button>
       <button class="nav-btn" data-view="calendar">Calendar</button>
       <button class="nav-btn" data-view="payments">Payments</button>
-      <button class="nav-btn" data-view="clients">Clients</button>
+      <div class="nav-dropdown" id="other-dropdown">
+        <button class="nav-btn" id="other-toggle">Other ▾</button>
+        <div class="nav-dropdown-menu hidden" id="other-menu">
+          <button class="nav-dropdown-item" data-view="clients">Clients</button>
+          <button class="nav-dropdown-item" data-view="services">Services</button>
+        </div>
+      </div>
       <button class="nav-btn" data-view="settings">Settings <span id="gmail-dot" class="dot dot-off" title="Gmail not connected"></span></button>
     </nav>
     <button class="btn btn-primary" id="btn-new-lead">+ New lead</button>
@@ -87,6 +93,15 @@
         <input type="search" id="client-search" placeholder="Search clients…">
       </div>
       <div id="client-list" class="card-list"></div>
+    </section>
+
+    <!-- ============================ SERVICES ============================= -->
+    <section id="view-services" class="view hidden">
+      <div class="filters">
+        <input type="search" id="service-search" placeholder="Search category, company, service…">
+        <button class="btn btn-primary" id="btn-add-service">+ Add service</button>
+      </div>
+      <div id="service-groups"></div>
     </section>
 
     <!-- ============================ SETTINGS ============================= -->
@@ -176,6 +191,68 @@
     </form>
   </div>
 </div>
+
+<!-- ========================== SERVICE FORM MODAL ========================= -->
+<div id="service-modal-backdrop" class="modal-backdrop hidden">
+  <div class="modal">
+    <h2 id="service-modal-title">Add service</h2>
+    <form id="service-form">
+      <input type="hidden" name="id">
+      <div class="form-row">
+        <label>Category *<input name="category" required placeholder="e.g. Water Activity" list="category-list"></label>
+        <label>Company / Provider<input name="company" placeholder="e.g. Jolly Pirates"></label>
+      </div>
+      <div class="form-row">
+        <label>Service *<input name="service_name" required placeholder="e.g. Pirates Sail Boat Tour"></label>
+        <label>Option / tier<input name="option_name" placeholder="e.g. Sunset Tour"></label>
+      </div>
+      <div class="form-row">
+        <label>Price *<input name="price" type="number" min="0" step="0.01" placeholder="0.00"></label>
+        <label>Price is
+          <select name="price_unit">
+            <option value="per_person">Per person</option>
+            <option value="per_hour">Per hour</option>
+            <option value="flat_total">Flat total</option>
+          </select>
+        </label>
+      </div>
+      <div class="form-row">
+        <label>Child price<input name="child_price" type="number" min="0" step="0.01" placeholder="0.00"></label>
+        <label>Timing / duration<input name="timing" placeholder="e.g. 5:30pm – 7:30pm"></label>
+      </div>
+      <div class="form-row">
+        <label>Min people<input name="min_people" type="number" min="1" step="1" placeholder="1"></label>
+        <label>Max people<input name="max_people" type="number" min="1" step="1" placeholder="e.g. 15"></label>
+      </div>
+      <div class="form-row">
+        <label>Downpayment
+          <select name="downpayment_type">
+            <option value="percent">Percent (%)</option>
+            <option value="fixed">Fixed amount ($)</option>
+          </select>
+        </label>
+        <label>Downpayment value<input name="downpayment_value" type="number" min="0" step="0.01" placeholder="e.g. 10"></label>
+      </div>
+      <div class="form-row">
+        <label>Commission<input name="commission" placeholder="e.g. 15% or $20/booking"></label>
+        <label>Communication method
+          <select name="communication_method">
+            <option value=""></option>
+            <option>Email</option><option>WhatsApp</option><option>Phone</option>
+            <option>Wix form</option><option>In person</option><option>Other</option>
+          </select>
+        </label>
+      </div>
+      <label>Notes<textarea name="notes" rows="2" placeholder="Anything else worth remembering…"></textarea></label>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="service-cancel">Cancel</button>
+        <button type="button" class="btn btn-danger hidden" id="service-delete">Delete</button>
+        <button type="submit" class="btn btn-primary">Save service</button>
+      </div>
+    </form>
+  </div>
+</div>
+<datalist id="category-list"></datalist>
 
 <script src="app.js"></script>
 </body>

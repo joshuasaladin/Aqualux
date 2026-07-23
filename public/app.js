@@ -85,6 +85,19 @@ function stripQuoted(body) {
   return { text, hasQuoted: true };
 }
 
+function renderMsgBubble(m, l) {
+  const isFormSubmission = m.body.startsWith('Website form submission');
+  const { text, hasQuoted } = isFormSubmission
+    ? { text: m.body, hasQuoted: false } : stripQuoted(m.body);
+  return `
+    <div class="msg ${m.direction}">
+      ${isFormSubmission ? '' :
+        `<div class="m-meta">${m.direction === 'in' ? esc(l.client_name) : 'You'} · ${fmtDateTime(m.sent_at)}</div>`}
+      <span class="msg-text">${esc(text)}</span>
+      ${hasQuoted ? `<div class="quoted-toggle" data-mid="${m.id}">Show quoted history ⌄</div>` : ''}
+    </div>`;
+}
+
 const statusBadge = (s) => `<span class="badge st-${s}">${STATUS_LABELS[s] || s}</span>`;
 const payBadge = (paid) => `<span class="badge pay-${paid ? 'paid' : 'unpaid'}">${paid ? 'Paid' : 'Unpaid'}</span>`;
 const bookBadge = (b) => `<span class="badge bk-${b ? 'yes' : 'no'}">${b ? 'Confirmed ✓' : 'Not confirmed'}</span>`;
@@ -121,16 +134,36 @@ function showView(name) {
   $('#view-' + name).classList.remove('hidden');
   document.querySelectorAll('.nav-btn').forEach((b) =>
     b.classList.toggle('active', b.dataset.view === name));
+  const inOtherMenu = name === 'clients' || name === 'services';
+  $('#other-toggle').classList.toggle('active', inOtherMenu);
+  document.querySelectorAll('.nav-dropdown-item').forEach((b) =>
+    b.classList.toggle('active', b.dataset.view === name));
+
   if (name === 'leads') loadLeads();
   if (name === 'confirmed') loadConfirmed();
   if (name === 'calendar') renderCalendar();
   if (name === 'payments') loadPayments();
   if (name === 'clients') loadClients();
+  if (name === 'services') loadServices();
   if (name === 'settings') loadSettings();
 }
 
-document.querySelectorAll('.nav-btn').forEach((b) =>
+document.querySelectorAll('.nav-btn[data-view]').forEach((b) =>
   b.addEventListener('click', () => showView(b.dataset.view)));
+
+// "Other" dropdown: toggles open/closed, click outside or an item closes it
+$('#other-toggle').addEventListener('click', (e) => {
+  e.stopPropagation();
+  $('#other-menu').classList.toggle('hidden');
+});
+document.querySelectorAll('.nav-dropdown-item').forEach((b) =>
+  b.addEventListener('click', () => {
+    $('#other-menu').classList.add('hidden');
+    showView(b.dataset.view);
+  }));
+document.addEventListener('click', (e) => {
+  if (!$('#other-dropdown').contains(e.target)) $('#other-menu').classList.add('hidden');
+});
 
 function refreshCurrentView() { showView(currentView); }
 
@@ -316,6 +349,136 @@ $('#payment-form').addEventListener('submit', async (e) => {
   loadPayments();
 });
 
+/* ------------------------------------------------------ services book --- */
+const PRICE_UNIT_LABELS = { per_person: '/ person', per_hour: '/ hour', flat_total: 'flat' };
+const collapsedCategories = new Set(JSON.parse(localStorage.getItem('aqualux_collapsed_cats') || '[]'));
+
+function fmtDownpayment(s) {
+  if (!s.downpayment_value) return '';
+  return s.downpayment_type === 'percent' ? `${s.downpayment_value}% down` : `${money(s.downpayment_value)} down`;
+}
+
+function serviceRowCard(s) {
+  const title = [s.service_name, s.option_name].filter(Boolean).join(' — ');
+  const people = (s.min_people || s.max_people)
+    ? `👥 ${s.min_people || 1}${s.max_people ? '–' + s.max_people : '+'}` : '';
+  const dp = fmtDownpayment(s);
+  return `
+  <div class="svc-row-card" data-service="${s.id}">
+    <span class="svc-row-title">${esc(title)}</span>
+    <span class="svc-row-right">
+      ${s.price ? `<span class="svc-row-price">${money(s.price)} ${PRICE_UNIT_LABELS[s.price_unit]}</span>` : ''}
+      ${people ? `<span class="svc-row-people">${people}</span>` : ''}
+      ${s.timing ? `<span class="svc-row-timing">⏱ ${esc(s.timing)}</span>` : ''}
+      ${dp ? `<span class="svc-row-timing">💰 ${esc(dp)}</span>` : ''}
+      ${s.communication_method ? `<span class="svc-comm-badge">${esc(s.communication_method)}</span>` : ''}
+    </span>
+  </div>`;
+}
+
+async function loadServices() {
+  const q = $('#service-search').value;
+  const rows = await api('/services' + (q ? '?q=' + encodeURIComponent(q) : ''));
+
+  // populate the category datalist for the add/edit form
+  const cats = [...new Set(rows.map((r) => r.category).filter(Boolean))].sort();
+  document.getElementById('category-list').innerHTML = cats.map((c) => `<option value="${esc(c)}">`).join('');
+
+  if (!rows.length) {
+    $('#service-groups').innerHTML = `<div class="empty">No services yet. Click “+ Add service” to build your info book — pricing, timings, commissions, everything in one place.</div>`;
+    return;
+  }
+
+  const byCategory = new Map();
+  for (const s of rows) {
+    const cat = s.category || 'Uncategorized';
+    if (!byCategory.has(cat)) byCategory.set(cat, []);
+    byCategory.get(cat).push(s);
+  }
+
+  $('#service-groups').innerHTML = [...byCategory.entries()].map(([cat, items]) => {
+    const byCompany = new Map();
+    for (const s of items) {
+      const co = s.company || '—';
+      if (!byCompany.has(co)) byCompany.set(co, []);
+      byCompany.get(co).push(s);
+    }
+    const collapsed = collapsedCategories.has(cat);
+    return `
+    <div class="svc-category ${collapsed ? 'collapsed' : ''}" data-cat="${esc(cat)}">
+      <div class="svc-category-head">
+        <h3>${esc(cat)}</h3>
+        <span class="count">${items.length} option${items.length === 1 ? '' : 's'}</span>
+        <span class="chev">▾</span>
+      </div>
+      ${[...byCompany.entries()].map(([co, svcs]) => `
+        <div class="svc-company-group">
+          ${co !== '—' ? `<div class="svc-company-name">${esc(co)}</div>` : ''}
+          ${svcs.map(serviceRowCard).join('')}
+        </div>`).join('')}
+    </div>`;
+  }).join('');
+
+  document.querySelectorAll('.svc-category-head').forEach((el) =>
+    el.addEventListener('click', () => {
+      const group = el.closest('.svc-category');
+      const cat = group.dataset.cat;
+      group.classList.toggle('collapsed');
+      if (group.classList.contains('collapsed')) collapsedCategories.add(cat);
+      else collapsedCategories.delete(cat);
+      localStorage.setItem('aqualux_collapsed_cats', JSON.stringify([...collapsedCategories]));
+    }));
+
+  document.querySelectorAll('.svc-row-card').forEach((el) =>
+    el.addEventListener('click', () => openServiceModal(rows.find((r) => r.id === Number(el.dataset.service)))));
+}
+
+let serviceSearchTimer;
+$('#service-search').addEventListener('input', () => {
+  clearTimeout(serviceSearchTimer); serviceSearchTimer = setTimeout(loadServices, 250);
+});
+
+function openServiceModal(service = null) {
+  const form = $('#service-form');
+  form.reset();
+  $('#service-modal-title').textContent = service ? 'Edit service' : 'Add service';
+  $('#service-delete').classList.toggle('hidden', !service);
+  form.id.value = service?.id || '';
+  if (service) {
+    for (const [k, v] of Object.entries(service)) {
+      if (form.elements[k] && v !== null) form.elements[k].value = v;
+    }
+  }
+  $('#service-modal-backdrop').classList.remove('hidden');
+  form.category.focus();
+}
+
+$('#btn-add-service').addEventListener('click', () => openServiceModal());
+$('#service-cancel').addEventListener('click', () => $('#service-modal-backdrop').classList.add('hidden'));
+$('#service-modal-backdrop').addEventListener('click', (e) => {
+  if (e.target === $('#service-modal-backdrop')) $('#service-modal-backdrop').classList.add('hidden');
+});
+
+$('#service-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(e.target);
+  const id = fd.get('id');
+  const body = Object.fromEntries(fd.entries());
+  delete body.id;
+  if (id) await api('/services/' + id, { method: 'PATCH', body: JSON.stringify(body) });
+  else await api('/services', { method: 'POST', body: JSON.stringify(body) });
+  $('#service-modal-backdrop').classList.add('hidden');
+  loadServices();
+});
+
+$('#service-delete').addEventListener('click', async () => {
+  const id = $('#service-form').id.value;
+  if (!id || !confirm('Delete this service?')) return;
+  await api('/services/' + id, { method: 'DELETE' });
+  $('#service-modal-backdrop').classList.add('hidden');
+  loadServices();
+});
+
 /* ------------------------------------------------------------ clients --- */
 async function loadClients() {
   const q = $('#client-search').value;
@@ -398,19 +561,9 @@ async function openLead(id) {
 
     <div class="panel">
       <h3>Conversation</h3>
-      <div class="thread">
-        ${l.messages.length ? l.messages.map((m) => {
-          const isFormSubmission = m.body.startsWith('Website form submission');
-          const { text, hasQuoted } = isFormSubmission
-            ? { text: m.body, hasQuoted: false } : stripQuoted(m.body);
-          return `
-          <div class="msg ${m.direction}">
-            ${isFormSubmission ? '' :
-              `<div class="m-meta">${m.direction === 'in' ? esc(l.client_name) : 'You'} · ${fmtDateTime(m.sent_at)}</div>`}
-            <span class="msg-text">${esc(text)}</span>
-            ${hasQuoted ? `<div class="quoted-toggle" data-mid="${m.id}">Show quoted history ⌄</div>` : ''}
-          </div>`;
-        }).join('') : '<div class="empty">No emails on this lead yet.</div>'}
+      <div class="thread thread-latest">
+        ${l.messages.length ? renderMsgBubble(l.messages[l.messages.length - 1], l)
+          : '<div class="empty">No emails on this lead yet.</div>'}
       </div>
       <div class="reply-box">
         <textarea id="d-reply" placeholder="Write your reply — it sends from your Gmail…" ${canEmail ? '' : 'disabled'}></textarea>
@@ -424,6 +577,11 @@ async function openLead(id) {
             'Connect Gmail in <a href="#" id="goto-settings">Settings</a> to send emails from here.'}</span>
         </div>
       </div>
+      ${l.messages.length > 1 ? `
+        <div class="older-toggle" id="older-toggle">▾ Show ${l.messages.length - 1} earlier message${l.messages.length - 1 === 1 ? '' : 's'}</div>
+        <div class="thread thread-older hidden" id="thread-older">
+          ${l.messages.slice(0, -1).reverse().map((m) => renderMsgBubble(m, l)).join('')}
+        </div>` : ''}
     </div>
 
     <button class="btn btn-danger btn-sm" id="d-delete">Delete lead</button>
@@ -490,6 +648,15 @@ async function openLead(id) {
     });
     openLead(id);
     refreshCurrentView();
+  });
+
+  // --- show/hide earlier messages (newest message is always visible) ---
+  $('#older-toggle')?.addEventListener('click', () => {
+    const older = $('#thread-older');
+    const hidden = older.classList.toggle('hidden');
+    $('#older-toggle').textContent = hidden
+      ? `▾ Show ${l.messages.length - 1} earlier message${l.messages.length - 1 === 1 ? '' : 's'}`
+      : `▴ Hide earlier messages`;
   });
 
   // --- expand/collapse quoted history in bubbles ---
@@ -597,8 +764,6 @@ async function openLead(id) {
 
   $('#drawer').classList.remove('hidden');
   $('#drawer-backdrop').classList.remove('hidden');
-  const thread = $('#drawer-content .thread');
-  if (thread) thread.scrollTop = thread.scrollHeight;
 }
 
 /* ------------------------------------------------------- client drawer --- */

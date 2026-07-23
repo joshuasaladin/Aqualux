@@ -337,6 +337,73 @@ app.delete('/api/payments/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// --------------------------------------------------------- services book --
+app.get('/api/services', (req, res) => {
+  const q = req.query.q ? `%${req.query.q}%` : null;
+  const rows = db.prepare(`
+    SELECT * FROM services
+    ${q ? `WHERE category LIKE ? OR company LIKE ? OR service_name LIKE ? OR option_name LIKE ? OR notes LIKE ?` : ''}
+    ORDER BY category, company, service_name, sort_order, id`)
+    .all(...(q ? [q, q, q, q, q] : []));
+  res.json(rows);
+});
+
+app.post('/api/services', (req, res) => {
+  const b = req.body || {};
+  if (!b.service_name?.trim()) return res.status(400).json({ error: 'Service name is required' });
+  const info = db.prepare(`
+    INSERT INTO services (category, company, service_name, option_name, price, price_unit,
+      child_price, min_people, max_people, downpayment_type, downpayment_value,
+      timing, commission, communication_method, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(
+      String(b.category || '').trim(), String(b.company || '').trim(),
+      String(b.service_name || '').trim(), String(b.option_name || '').trim(),
+      Number(b.price) || 0, ['per_person', 'per_hour', 'flat_total'].includes(b.price_unit) ? b.price_unit : 'per_person',
+      Number(b.child_price) || 0, b.min_people ? parseInt(b.min_people, 10) : null,
+      b.max_people ? parseInt(b.max_people, 10) : null,
+      b.downpayment_type === 'fixed' ? 'fixed' : 'percent', Number(b.downpayment_value) || 0,
+      String(b.timing || '').trim(), String(b.commission || '').trim(),
+      String(b.communication_method || '').trim(), String(b.notes || '').trim()
+    );
+  res.status(201).json(db.prepare(`SELECT * FROM services WHERE id = ?`).get(info.lastInsertRowid));
+});
+
+app.patch('/api/services/:id', (req, res) => {
+  const svc = db.prepare(`SELECT * FROM services WHERE id = ?`).get(req.params.id);
+  if (!svc) return res.status(404).json({ error: 'Not found' });
+  const b = req.body || {};
+  const fields = {
+    category: b.category, company: b.company, service_name: b.service_name, option_name: b.option_name,
+    price: b.price !== undefined ? Number(b.price) || 0 : undefined,
+    price_unit: ['per_person', 'per_hour', 'flat_total'].includes(b.price_unit) ? b.price_unit : undefined,
+    child_price: b.child_price !== undefined ? Number(b.child_price) || 0 : undefined,
+    min_people: b.min_people !== undefined ? (b.min_people ? parseInt(b.min_people, 10) : null) : undefined,
+    max_people: b.max_people !== undefined ? (b.max_people ? parseInt(b.max_people, 10) : null) : undefined,
+    downpayment_type: b.downpayment_type === 'fixed' || b.downpayment_type === 'percent' ? b.downpayment_type : undefined,
+    downpayment_value: b.downpayment_value !== undefined ? Number(b.downpayment_value) || 0 : undefined,
+    timing: b.timing, commission: b.commission, communication_method: b.communication_method, notes: b.notes
+  };
+  const sets = [];
+  const params = [];
+  for (const [k, v] of Object.entries(fields)) {
+    if (v === undefined) continue;
+    sets.push(`${k} = ?`);
+    params.push(typeof v === 'string' ? v.trim() : v);
+  }
+  if (sets.length) {
+    sets.push(`updated_at = datetime('now')`);
+    params.push(req.params.id);
+    db.prepare(`UPDATE services SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+  }
+  res.json(db.prepare(`SELECT * FROM services WHERE id = ?`).get(req.params.id));
+});
+
+app.delete('/api/services/:id', (req, res) => {
+  db.prepare(`DELETE FROM services WHERE id = ?`).run(req.params.id);
+  res.json({ ok: true });
+});
+
 // ------------------------------------------------------------ calendar ----
 // Confirmed bookings within a date range, for the calendar tab.
 app.get('/api/calendar', (req, res) => {

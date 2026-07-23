@@ -87,6 +87,32 @@ db.exec(`
     received_at      TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- Service info book: the catalog of services Aqualux offers/resells.
+  CREATE TABLE IF NOT EXISTS services (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    category              TEXT NOT NULL DEFAULT '',
+    company               TEXT NOT NULL DEFAULT '',
+    service_name          TEXT NOT NULL DEFAULT '',
+    option_name           TEXT NOT NULL DEFAULT '',
+    price                 REAL DEFAULT 0,
+    price_unit            TEXT NOT NULL DEFAULT 'per_person'
+                           CHECK (price_unit IN ('per_person','per_hour','flat_total')),
+    child_price            REAL DEFAULT 0,
+    min_people            INTEGER,
+    max_people            INTEGER,
+    downpayment_type      TEXT NOT NULL DEFAULT 'percent'
+                           CHECK (downpayment_type IN ('percent','fixed')),
+    downpayment_value     REAL DEFAULT 0,
+    timing                TEXT DEFAULT '',
+    commission            TEXT DEFAULT '',
+    communication_method  TEXT DEFAULT '',
+    notes                 TEXT DEFAULT '',
+    sort_order            INTEGER NOT NULL DEFAULT 0,
+    created_at            TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at            TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_services_category ON services(category);
+
   CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT
