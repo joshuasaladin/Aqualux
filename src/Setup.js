@@ -6,10 +6,6 @@
  * safe — it only creates what is missing.
  */
 function setup() {
-  // Gmail labels
-  getOrCreateLabel_(CONFIG.PROCESSED_LABEL);
-  getOrCreateLabel_(CONFIG.REVIEW_LABEL);
-
   // Invoice folder
   let folderId = getProp_('INVOICE_FOLDER_ID') || CONFIG.INVOICE_FOLDER_ID;
   if (!folderId) {

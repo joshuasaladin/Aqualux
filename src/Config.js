@@ -24,9 +24,8 @@ const CONFIG = {
   LOG_SPREADSHEET_ID: '',
   INVOICE_FOLDER_ID: '',
 
-  // Gmail
-  PROCESSED_LABEL: 'AquaLux/Processed',
-  REVIEW_LABEL: 'AquaLux/Needs-Review',
+  // Gmail — no labels are created or applied. Submissions needing your
+  // attention are starred and you're alerted by email instead.
   // Only messages matching this query are even considered; the parser then
   // additionally requires the Wix body signature and a Wix sender domain.
   GMAIL_QUERY: '"A site visitor just submitted your form" newer_than:7d',
