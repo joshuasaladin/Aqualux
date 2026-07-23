@@ -434,6 +434,13 @@ app.delete('/api/services/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+// Re-run the bundled catalog import. Only inserts anything if the Services
+// book is currently empty — safe to call anytime, including as a manual
+// retry if an earlier import was interrupted (e.g. by a server restart).
+app.post('/api/services/reimport', (req, res) => {
+  res.json(seedServiceCatalog());
+});
+
 // ------------------------------------------------------------ calendar ----
 // Confirmed bookings within a date range, for the calendar tab.
 app.get('/api/calendar', (req, res) => {
@@ -494,8 +501,15 @@ if (process.env.DEMO === '1') {
 
 // One-time seed: populate the Services book from the bundled catalog, but
 // only if it's currently empty — never overwrites services you've since
-// added or edited by hand.
-if (db.prepare(`SELECT COUNT(*) n FROM services`).get().n === 0 && SERVICE_CATALOG.length) {
+// added or edited by hand. Wrapped in a transaction + try/catch so a
+// failure partway through can never leave a half-imported catalog stuck
+// (which would otherwise block re-seeding forever, since the empty-table
+// check would no longer be true) and can never crash the server itself.
+function seedServiceCatalog() {
+  const count = db.prepare(`SELECT COUNT(*) n FROM services`).get().n;
+  if (count > 0) return { skipped: true, reason: 'not empty', count };
+  if (!SERVICE_CATALOG.length) return { skipped: true, reason: 'no catalog bundled' };
+
   const insSvc = db.prepare(`
     INSERT INTO services (category, wix_form_name, service_name, company, contact,
       booking_method, info_needed, internal_notes)
@@ -505,17 +519,28 @@ if (db.prepare(`SELECT COUNT(*) n FROM services`).get().n === 0 && SERVICE_CATAL
       min_people, max_people, downpayment_percent, downpayment_fixed, downpayment_per_person,
       timing, notes)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-  for (const s of SERVICE_CATALOG) {
-    const info = insSvc.run(s.category, s.wix_form_name, s.service_name, s.company,
-      s.contact, s.booking_method, s.info_needed, s.internal_notes);
-    for (const o of s.options) {
-      insOpt.run(info.lastInsertRowid, o.option_name, o.price, o.price_unit, o.child_price,
-        o.min_people, o.max_people, o.downpayment_percent, o.downpayment_fixed,
-        o.downpayment_per_person ? 1 : 0, o.timing, o.notes);
+  try {
+    db.exec('BEGIN');
+    for (const s of SERVICE_CATALOG) {
+      const info = insSvc.run(s.category, s.wix_form_name, s.service_name, s.company,
+        s.contact, s.booking_method, s.info_needed, s.internal_notes);
+      for (const o of s.options) {
+        insOpt.run(info.lastInsertRowid, o.option_name, o.price, o.price_unit, o.child_price ?? 0,
+          o.min_people ?? null, o.max_people ?? null, o.downpayment_percent ?? 0, o.downpayment_fixed ?? 0,
+          o.downpayment_per_person ? 1 : 0, o.timing || '', o.notes || '');
+      }
     }
+    db.exec('COMMIT');
+    const options = SERVICE_CATALOG.reduce((a, s) => a + s.options.length, 0);
+    console.log(`Seeded Services book: ${SERVICE_CATALOG.length} services, ${options} pricing options.`);
+    return { ok: true, services: SERVICE_CATALOG.length, options };
+  } catch (err) {
+    db.exec('ROLLBACK');
+    console.error('[services seed] failed, rolled back — Services book left empty:', err.message);
+    return { ok: false, error: err.message };
   }
-  console.log(`Seeded Services book: ${SERVICE_CATALOG.length} services, ${SERVICE_CATALOG.reduce((a, s) => a + s.options.length, 0)} pricing options.`);
 }
+seedServiceCatalog();
 
 // One-time cleanup: remove leads/clients mistakenly created from payment-
 // service notification emails before the sender gate existed. Their threads

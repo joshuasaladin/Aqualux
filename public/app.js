@@ -471,7 +471,22 @@ async function loadServices() {
   $('#category-list').innerHTML = cats.map((c) => `<option value="${esc(c)}">`).join('');
 
   if (!allServices.length) {
-    $('#service-groups').innerHTML = `<div class="empty">No services yet. Click “+ Add service” to build your info book — pricing, timings, commissions, everything in one place.</div>`;
+    $('#service-groups').innerHTML = `
+      <div class="empty">
+        No services yet. Click “+ Add service” to build your info book — pricing, timings, commissions, everything in one place.<br><br>
+        <button class="btn btn-primary btn-sm" id="btn-reimport-catalog">⟳ Import starter catalog</button>
+      </div>`;
+    $('#btn-reimport-catalog')?.addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      e.target.textContent = 'Importing…';
+      const result = await api('/services/reimport', { method: 'POST' });
+      if (result.ok) loadServices();
+      else {
+        alert(result.error ? `Import failed: ${result.error}` : 'Nothing to import — the catalog may already be loaded elsewhere.');
+        e.target.disabled = false;
+        e.target.textContent = '⟳ Import starter catalog';
+      }
+    });
     return;
   }
 
