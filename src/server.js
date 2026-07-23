@@ -510,6 +510,18 @@ function seedServiceCatalog() {
   if (count > 0) return { skipped: true, reason: 'not empty', count };
   if (!SERVICE_CATALOG.length) return { skipped: true, reason: 'no catalog bundled' };
 
+  // Defensive cleanup: drop any service_options rows left orphaned by an
+  // earlier interrupted run (their parent service_id no longer exists in
+  // services). These would otherwise sit invisibly in the table — the
+  // Services view only ever shows options joined to a real service — and
+  // FOREIGN KEY enforcement could still see them and reject new inserts
+  // that happen to reuse a freed rowid.
+  const orphans = db.prepare(`
+    DELETE FROM service_options WHERE service_id NOT IN (SELECT id FROM services)`).run();
+  if (orphans.changes) console.log(`[services seed] cleared ${orphans.changes} orphaned option row(s) before import`);
+
+  db.exec('PRAGMA foreign_keys = ON');
+
   const insSvc = db.prepare(`
     INSERT INTO services (category, wix_form_name, service_name, company, contact,
       booking_method, info_needed, internal_notes)
@@ -519,13 +531,17 @@ function seedServiceCatalog() {
       min_people, max_people, downpayment_percent, downpayment_fixed, downpayment_per_person,
       timing, notes)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  let progress = '';
   try {
     db.exec('BEGIN');
     for (const s of SERVICE_CATALOG) {
+      progress = `service "${s.service_name}"`;
       const info = insSvc.run(s.category, s.wix_form_name, s.service_name, s.company,
         s.contact, s.booking_method, s.info_needed, s.internal_notes);
+      const serviceId = Number(info.lastInsertRowid);
       for (const o of s.options) {
-        insOpt.run(info.lastInsertRowid, o.option_name, o.price, o.price_unit, o.child_price ?? 0,
+        progress = `service "${s.service_name}" option "${o.option_name}" (parent id ${serviceId})`;
+        insOpt.run(serviceId, o.option_name, o.price, o.price_unit, o.child_price ?? 0,
           o.min_people ?? null, o.max_people ?? null, o.downpayment_percent ?? 0, o.downpayment_fixed ?? 0,
           o.downpayment_per_person ? 1 : 0, o.timing || '', o.notes || '');
       }
@@ -536,8 +552,8 @@ function seedServiceCatalog() {
     return { ok: true, services: SERVICE_CATALOG.length, options };
   } catch (err) {
     db.exec('ROLLBACK');
-    console.error('[services seed] failed, rolled back — Services book left empty:', err.message);
-    return { ok: false, error: err.message };
+    console.error(`[services seed] failed on ${progress}, rolled back — Services book left empty:`, err.message);
+    return { ok: false, error: `${err.message} (while importing ${progress})` };
   }
 }
 seedServiceCatalog();
