@@ -363,7 +363,8 @@ async function openLead(id) {
           <button class="btn btn-primary" id="d-send" ${canEmail ? '' : 'disabled'}>Send reply ✉️</button>
           <button class="btn" id="d-attach" ${canEmail ? '' : 'disabled'} title="Attach files">📎 Attach</button>
           <input type="file" id="d-files" multiple hidden>
-          <span class="send-status" id="d-send-status">${canEmail ? '' :
+          <span class="send-status" id="d-send-status">${canEmail ?
+            '✍️ Your signature is added automatically' :
             'Connect Gmail in <a href="#" id="goto-settings">Settings</a> to send emails from here.'}</span>
         </div>
       </div>
@@ -556,6 +557,15 @@ async function loadSettings() {
   const s = await api('/gmail/status');
   gmailStatus = s;
   updateGmailDot();
+
+  const sig = await api('/signature');
+  $('#sig-text').value = sig.signature;
+  $('#sig-save').onclick = async () => {
+    await api('/signature', { method: 'POST', body: JSON.stringify({ signature: $('#sig-text').value }) });
+    $('#sig-status').textContent = 'Saved ✓';
+    setTimeout(() => { $('#sig-status').textContent = ''; }, 1500);
+  };
+
   const panel = $('#gmail-panel');
 
   if (s.connected) {

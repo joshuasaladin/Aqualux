@@ -20,6 +20,16 @@ const SKIP_LABELS = new Set(['CATEGORY_PROMOTIONS', 'CATEGORY_SOCIAL', 'SPAM']);
 // Payment services whose notification emails go to the Payments tab.
 const PAYMENT_SENDERS = /venmo\.com|zelle|chase\.com|paypal\.com|cash\.app|square(?:up)?\.com|wellsfargo|bankofamerica|citi(?:bank)?\.com|wise\.com|revolut\.com/i;
 
+// Appended to every outgoing reply; editable in Settings.
+export const DEFAULT_SIGNATURE = `Isabella Frieri
+
+Aqua Lux Aruba
+Concierge & Guest services
+
+📞 +297 567-0134
+✉️ aqualuxaruba@gmail.com
+🌐 www.aqualuxaruba.com`;
+
 export function getCredentials() {
   const stored = getSetting('gmail_credentials', {});
   return {
@@ -350,12 +360,16 @@ export async function syncNow() {
         continue;
       }
 
-      // Payment notification (Venmo / Zelle / Chase / …) -> Payments tab.
-      const pay = parsePaymentNotification(from, subject, bodyText);
-      if (pay) {
-        recordPayment(pay, first, subject, bodyText);
+      // Emails from payment services NEVER become leads: money-received
+      // notifications go to the Payments tab; everything else from them
+      // (transfer initiated, statements, alerts) is skipped entirely.
+      if (PAYMENT_SENDERS.test(from.email)) {
+        const pay = parsePaymentNotification(from, subject, bodyText);
+        if (pay) {
+          recordPayment(pay, first, subject, bodyText);
+          payments++;
+        }
         markThreadProcessed(t.id);
-        payments++;
         continue;
       }
 
@@ -492,29 +506,36 @@ export async function sendReply(lead, client, bodyText, attachments = []) {
     headers.push(`In-Reply-To: ${lastIn.rfc_message_id}`, `References: ${lastIn.rfc_message_id}`);
   }
 
+  // Append the signature (Settings tab) to the outgoing email.
+  const signature = getSetting('email_signature', DEFAULT_SIGNATURE);
+  const fullBody = signature?.trim() ? `${bodyText}\n\n${signature}` : bodyText;
+
+  // Encode text as base64 so emoji and accents in the signature survive.
+  const fold = (s) => s.replace(/.{76}/g, '$&\r\n');
+  const textB64 = fold(Buffer.from(fullBody, 'utf8').toString('base64'));
+
   let rfc822;
   if (attachments.length) {
     const boundary = 'aqualux_' + crypto.randomBytes(8).toString('hex');
     headers.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
     const parts = [
-      `--${boundary}\r\nContent-Type: text/plain; charset="UTF-8"\r\n\r\n${bodyText}\r\n`
+      `--${boundary}\r\nContent-Type: text/plain; charset="UTF-8"\r\n` +
+      `Content-Transfer-Encoding: base64\r\n\r\n${textB64}\r\n`
     ];
     for (const a of attachments) {
-      // fold base64 into 76-char lines per MIME spec
-      const folded = a.data.replace(/.{76}/g, '$&\r\n');
       parts.push(
         `--${boundary}\r\n` +
         `Content-Type: ${a.mimeType}; name="${a.filename}"\r\n` +
         `Content-Transfer-Encoding: base64\r\n` +
         `Content-Disposition: attachment; filename="${a.filename}"\r\n\r\n` +
-        `${folded}\r\n`
+        `${fold(a.data)}\r\n`
       );
     }
     parts.push(`--${boundary}--`);
     rfc822 = headers.join('\r\n') + '\r\n\r\n' + parts.join('');
   } else {
-    headers.push('Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: 7bit');
-    rfc822 = headers.join('\r\n') + '\r\n\r\n' + bodyText;
+    headers.push('Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64');
+    rfc822 = headers.join('\r\n') + '\r\n\r\n' + textB64;
   }
 
   const sent = await apiSendRaw(rfc822, lead.gmail_thread_id || undefined);

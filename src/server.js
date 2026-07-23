@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { db, touchLead, upsertClient, setSetting, markThreadProcessed, LEAD_ORDER } from './db.js';
+import { db, touchLead, upsertClient, setSetting, getSetting, markThreadProcessed, LEAD_ORDER } from './db.js';
 import * as gmail from './gmail.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -264,6 +264,16 @@ app.post('/api/leads/:id/reply', async (req, res) => {
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
+});
+
+// ----------------------------------------------------------- signature ----
+app.get('/api/signature', (req, res) => {
+  res.json({ signature: getSetting('email_signature', gmail.DEFAULT_SIGNATURE) });
+});
+
+app.post('/api/signature', (req, res) => {
+  setSetting('email_signature', String(req.body?.signature ?? '').slice(0, 2000));
+  res.json({ ok: true });
 });
 
 // ------------------------------------------------------------ payments ----
