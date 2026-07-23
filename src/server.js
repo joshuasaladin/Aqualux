@@ -132,7 +132,9 @@ app.get('/api/leads', (req, res) => {
   const { q, tab, sort } = req.query;
   const where = [];
   const params = [];
-  if (tab === 'confirmed') where.push('l.booking_confirmed = 1');
+  // Confirmed bookings live in their own tab (+ Calendar/Clients) — the main
+  // Leads list shows only the active, not-yet-confirmed pipeline.
+  where.push(tab === 'confirmed' ? 'l.booking_confirmed = 1' : 'l.booking_confirmed = 0');
   if (q) {
     where.push(`(c.name LIKE ? OR c.email LIKE ? OR l.service LIKE ? OR l.subject LIKE ?)`);
     const like = `%${q}%`;
@@ -349,6 +351,21 @@ const PORT = process.env.PORT || 3000;
 if (process.env.DEMO === '1') {
   const { seedDemo } = await import('./seed.js');
   seedDemo();
+}
+
+// One-time cleanup: remove leads/clients mistakenly created from payment-
+// service notification emails before the sender gate existed. Their threads
+// are remembered so a sync never brings them back.
+{
+  const paymentClients = db.prepare(`SELECT id, email FROM clients`).all()
+    .filter((c) => gmail.PAYMENT_SENDERS.test(c.email));
+  for (const c of paymentClients) {
+    for (const l of db.prepare(`SELECT gmail_thread_id FROM leads WHERE client_id = ?`).all(c.id)) {
+      if (l.gmail_thread_id) markThreadProcessed(l.gmail_thread_id);
+    }
+    db.prepare(`DELETE FROM clients WHERE id = ?`).run(c.id); // cascades to leads
+    console.log(`Removed payment-service lead/client: ${c.email}`);
+  }
 }
 
 gmail.startPolling();

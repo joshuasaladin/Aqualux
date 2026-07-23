@@ -18,14 +18,15 @@ const SKIP_SENDERS = /no[-._]?reply|donotreply|mailer-daemon|notifications?@|new
 // Gmail's own categorization: promotions/social/spam are not leads.
 const SKIP_LABELS = new Set(['CATEGORY_PROMOTIONS', 'CATEGORY_SOCIAL', 'SPAM']);
 // Payment services whose notification emails go to the Payments tab.
-const PAYMENT_SENDERS = /venmo\.com|zelle|chase\.com|paypal\.com|cash\.app|square(?:up)?\.com|wellsfargo|bankofamerica|citi(?:bank)?\.com|wise\.com|revolut\.com/i;
+export const PAYMENT_SENDERS = /venmo\.com|zelle|chase\.com|paypal\.com|cash\.app|square(?:up)?\.com|wellsfargo|bankofamerica|citi(?:bank)?\.com|wise\.com|revolut\.com/i;
 
 // Appended to every outgoing reply; editable in Settings.
-export const DEFAULT_SIGNATURE = `Isabella Frieri
+export const DEFAULT_SIGNATURE = `Kind regards,
+
+Isabella Frieri
 
 Aqua Lux Aruba
 Concierge & Guest services
-
 📞 +297 567-0134
 ✉️ aqualuxaruba@gmail.com
 🌐 www.aqualuxaruba.com`;
@@ -506,9 +507,12 @@ export async function sendReply(lead, client, bodyText, attachments = []) {
     headers.push(`In-Reply-To: ${lastIn.rfc_message_id}`, `References: ${lastIn.rfc_message_id}`);
   }
 
-  // Append the signature (Settings tab) to the outgoing email.
-  const signature = getSetting('email_signature', DEFAULT_SIGNATURE);
-  const fullBody = signature?.trim() ? `${bodyText}\n\n${signature}` : bodyText;
+  // Append the signature (Settings tab) unless the message already contains
+  // it — e.g. when it was inserted with the "Footer" button and possibly edited.
+  const signature = getSetting('email_signature', DEFAULT_SIGNATURE) || '';
+  const sigLines = signature.split('\n').map((l) => l.trim()).filter((l) => l.length > 3);
+  const alreadyHasSig = sigLines.some((l) => bodyText.includes(l));
+  const fullBody = signature.trim() && !alreadyHasSig ? `${bodyText}\n\n${signature}` : bodyText;
 
   // Encode text as base64 so emoji and accents in the signature survive.
   const fold = (s) => s.replace(/.{76}/g, '$&\r\n');
@@ -542,12 +546,12 @@ export async function sendReply(lead, client, bodyText, attachments = []) {
 
   // Leads created manually or from the website form get a thread on first reply
   if (!lead.gmail_thread_id && sent.threadId) {
-    db.prepare(`UPDATE leads SET gmail_thread_id = ? WHERE id = ?`).run(sent.threadId, lead.id);
+    db.prepare(`UPDATE OR IGNORE leads SET gmail_thread_id = ? WHERE id = ?`).run(sent.threadId, lead.id);
   }
   const storedBody = bodyText +
     (attachments.length ? `\n\n📎 ${attachments.map((a) => a.filename).join(', ')}` : '');
   db.prepare(`
-    INSERT INTO messages (lead_id, gmail_message_id, direction, from_email, subject, body, sent_at)
+    INSERT OR IGNORE INTO messages (lead_id, gmail_message_id, direction, from_email, subject, body, sent_at)
     VALUES (?, ?, 'out', ?, ?, ?, ?)`)
     .run(lead.id, sent.id || null, myEmail, subject, storedBody, new Date().toISOString());
   recomputeStatus(lead.id);

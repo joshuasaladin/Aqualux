@@ -362,9 +362,9 @@ async function openLead(id) {
         <div class="reply-actions">
           <button class="btn btn-primary" id="d-send" ${canEmail ? '' : 'disabled'}>Send reply ✉️</button>
           <button class="btn" id="d-attach" ${canEmail ? '' : 'disabled'} title="Attach files">📎 Attach</button>
+          <button class="btn" id="d-footer" ${canEmail ? '' : 'disabled'} title="Insert your footer at the bottom of the message">Footer</button>
           <input type="file" id="d-files" multiple hidden>
-          <span class="send-status" id="d-send-status">${canEmail ?
-            '✍️ Your signature is added automatically' :
+          <span class="send-status" id="d-send-status">${canEmail ? '' :
             'Connect Gmail in <a href="#" id="goto-settings">Settings</a> to send emails from here.'}</span>
         </div>
       </div>
@@ -434,6 +434,25 @@ async function openLead(id) {
     });
     openLead(id);
     refreshCurrentView();
+  });
+
+  // --- auto-expanding reply box ---
+  const replyBox = $('#d-reply');
+  function autoGrow() {
+    replyBox.style.height = 'auto';
+    replyBox.style.height = Math.min(replyBox.scrollHeight + 2, 420) + 'px';
+  }
+  replyBox.addEventListener('input', autoGrow);
+
+  // --- footer button: insert the signature at the bottom of the message ---
+  $('#d-footer')?.addEventListener('click', async () => {
+    const { signature } = await api('/signature');
+    if (!signature?.trim()) { showView('settings'); return; }
+    const firstLine = signature.split('\n').map((l) => l.trim()).find((l) => l.length > 3);
+    if (firstLine && replyBox.value.includes(firstLine)) return; // already there
+    replyBox.value = replyBox.value.replace(/\s+$/, '') + '\n\n' + signature;
+    autoGrow();
+    replyBox.focus();
   });
 
   // --- attachments ---
