@@ -149,7 +149,7 @@ function showView(name) {
 }
 
 document.querySelectorAll('.nav-btn[data-view]').forEach((b) =>
-  b.addEventListener('click', () => showView(b.dataset.view)));
+  b.addEventListener('click', () => { showView(b.dataset.view); closeMobileNav(); }));
 
 // "Other" dropdown: toggles open/closed, click outside or an item closes it
 $('#other-toggle').addEventListener('click', (e) => {
@@ -160,9 +160,23 @@ document.querySelectorAll('.nav-dropdown-item').forEach((b) =>
   b.addEventListener('click', () => {
     $('#other-menu').classList.add('hidden');
     showView(b.dataset.view);
+    closeMobileNav();
   }));
 document.addEventListener('click', (e) => {
   if (!$('#other-dropdown').contains(e.target)) $('#other-menu').classList.add('hidden');
+});
+
+// Hamburger menu (mobile): toggles the nav panel open/closed
+function closeMobileNav() { $('#main-nav').classList.remove('nav-open'); }
+$('#hamburger-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  $('#main-nav').classList.toggle('nav-open');
+});
+document.addEventListener('click', (e) => {
+  if ($('#main-nav').classList.contains('nav-open') &&
+      !$('#main-nav').contains(e.target) && e.target !== $('#hamburger-btn')) {
+    closeMobileNav();
+  }
 });
 
 function refreshCurrentView() { showView(currentView); }

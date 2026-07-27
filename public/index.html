@@ -23,8 +23,12 @@
 
 <div id="app" class="hidden">
   <header class="topbar">
-    <div class="brand"><span class="brand-drop">💧</span> Aqualux <span class="brand-sub">Concierge CRM</span></div>
-    <nav>
+    <div class="topbar-row1">
+      <div class="brand"><span class="brand-drop">💧</span> Aqualux <span class="brand-sub">Concierge CRM</span></div>
+      <button class="btn btn-primary btn-newlead-top" id="btn-new-lead">+ New lead</button>
+      <button class="hamburger" id="hamburger-btn" aria-label="Menu">☰</button>
+    </div>
+    <nav id="main-nav">
       <button class="nav-btn active" data-view="leads">Leads</button>
       <button class="nav-btn" data-view="confirmed">Confirmed</button>
       <button class="nav-btn" data-view="calendar">Calendar</button>
@@ -38,7 +42,6 @@
       </div>
       <button class="nav-btn" data-view="settings">Settings <span id="gmail-dot" class="dot dot-off" title="Gmail not connected"></span></button>
     </nav>
-    <button class="btn btn-primary" id="btn-new-lead">+ New lead</button>
   </header>
 
   <main>
