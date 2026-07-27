@@ -499,29 +499,33 @@ if (process.env.DEMO === '1') {
   seedDemo();
 }
 
-// One-time seed: populate the Services book from the bundled catalog, but
-// only if it's currently empty — never overwrites services you've since
-// added or edited by hand. Wrapped in a transaction + try/catch so a
-// failure partway through can never leave a half-imported catalog stuck
-// (which would otherwise block re-seeding forever, since the empty-table
-// check would no longer be true) and can never crash the server itself.
+// Populate the Services book from the bundled catalog. Safe to call any
+// number of times: each catalog entry is imported only if a service with
+// the same category + service name doesn't already exist, so a call that
+// gets interrupted (or one that hits a one-off insert error) can simply be
+// re-run — it picks up exactly where it left off instead of needing a
+// clean slate. Never overwrites a service you've since edited by hand.
+//
+// Deliberately does NOT wrap the import in an explicit SQL transaction:
+// Node's built-in node:sqlite is still an experimental module, and on at
+// least one deployment target an explicit BEGIN caused every very-first
+// insert after it to fail with "FOREIGN KEY constraint failed" even though
+// the parent row had just been created successfully in the line above.
+// Per-entry existence checks give the same effective safety without
+// depending on that transaction behavior.
 function seedServiceCatalog() {
-  const count = db.prepare(`SELECT COUNT(*) n FROM services`).get().n;
-  if (count > 0) return { skipped: true, reason: 'not empty', count };
   if (!SERVICE_CATALOG.length) return { skipped: true, reason: 'no catalog bundled' };
 
   // Defensive cleanup: drop any service_options rows left orphaned by an
-  // earlier interrupted run (their parent service_id no longer exists in
-  // services). These would otherwise sit invisibly in the table — the
-  // Services view only ever shows options joined to a real service — and
-  // FOREIGN KEY enforcement could still see them and reject new inserts
-  // that happen to reuse a freed rowid.
+  // earlier interrupted run (parent service_id no longer exists). These
+  // sit invisibly in the table — the Services view only ever shows options
+  // joined to a real service — but FK enforcement can still see them.
   const orphans = db.prepare(`
     DELETE FROM service_options WHERE service_id NOT IN (SELECT id FROM services)`).run();
   if (orphans.changes) console.log(`[services seed] cleared ${orphans.changes} orphaned option row(s) before import`);
 
-  db.exec('PRAGMA foreign_keys = ON');
-
+  const findExisting = db.prepare(`
+    SELECT id FROM services WHERE category = ? AND service_name = ? AND wix_form_name = ?`);
   const insSvc = db.prepare(`
     INSERT INTO services (category, wix_form_name, service_name, company, contact,
       booking_method, info_needed, internal_notes)
@@ -531,30 +535,52 @@ function seedServiceCatalog() {
       min_people, max_people, downpayment_percent, downpayment_fixed, downpayment_per_person,
       timing, notes)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-  let progress = '';
-  try {
-    db.exec('BEGIN');
-    for (const s of SERVICE_CATALOG) {
-      progress = `service "${s.service_name}"`;
-      const info = insSvc.run(s.category, s.wix_form_name, s.service_name, s.company,
-        s.contact, s.booking_method, s.info_needed, s.internal_notes);
-      const serviceId = Number(info.lastInsertRowid);
-      for (const o of s.options) {
-        progress = `service "${s.service_name}" option "${o.option_name}" (parent id ${serviceId})`;
+
+  const existingOptionNames = db.prepare(`
+    SELECT option_name FROM service_options WHERE service_id = ?`);
+
+  let created = 0, skipped = 0, optionsInserted = 0;
+  const errors = [];
+  for (const s of SERVICE_CATALOG) {
+    let serviceId;
+    const existing = findExisting.get(s.category, s.service_name, s.wix_form_name);
+    if (existing) {
+      serviceId = existing.id;
+      skipped++;
+    } else {
+      try {
+        const info = insSvc.run(s.category, s.wix_form_name, s.service_name, s.company,
+          s.contact, s.booking_method, s.info_needed, s.internal_notes);
+        serviceId = Number(info.lastInsertRowid);
+        created++;
+      } catch (err) {
+        errors.push(`service "${s.service_name}": ${err.message}`);
+        continue;
+      }
+    }
+
+    // Fill in any options this service is still missing — covers both a
+    // brand-new service and one that exists but was left incomplete by an
+    // earlier interrupted run. Never re-inserts an option already present.
+    const haveNames = new Set(existingOptionNames.all(serviceId).map((r) => r.option_name));
+    for (const o of s.options) {
+      if (haveNames.has(o.option_name)) continue;
+      try {
         insOpt.run(serviceId, o.option_name, o.price, o.price_unit, o.child_price ?? 0,
           o.min_people ?? null, o.max_people ?? null, o.downpayment_percent ?? 0, o.downpayment_fixed ?? 0,
           o.downpayment_per_person ? 1 : 0, o.timing || '', o.notes || '');
+        optionsInserted++;
+      } catch (err) {
+        errors.push(`option "${o.option_name}" of "${s.service_name}": ${err.message}`);
       }
     }
-    db.exec('COMMIT');
-    const options = SERVICE_CATALOG.reduce((a, s) => a + s.options.length, 0);
-    console.log(`Seeded Services book: ${SERVICE_CATALOG.length} services, ${options} pricing options.`);
-    return { ok: true, services: SERVICE_CATALOG.length, options };
-  } catch (err) {
-    db.exec('ROLLBACK');
-    console.error(`[services seed] failed on ${progress}, rolled back — Services book left empty:`, err.message);
-    return { ok: false, error: `${err.message} (while importing ${progress})` };
   }
+
+  if (errors.length) console.error('[services seed] errors:', errors);
+  if (created || optionsInserted) {
+    console.log(`Services book import: ${created} service(s) added (${skipped} already existed), ${optionsInserted} pricing option(s) added${errors.length ? `, ${errors.length} error(s)` : ''}.`);
+  }
+  return { ok: errors.length === 0, created, skipped, options: optionsInserted, errors };
 }
 seedServiceCatalog();
 

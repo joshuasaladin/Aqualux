@@ -463,6 +463,26 @@ function serviceCardBody(s) {
 
 let allServices = [];
 
+async function runCatalogSync(btn, idleLabel) {
+  btn.disabled = true;
+  btn.textContent = 'Syncing…';
+  const result = await api('/services/reimport', { method: 'POST' });
+  if (result.created > 0 || result.options > 0) {
+    loadServices();
+    if (result.errors?.length) {
+      alert(`Added ${result.created} service(s) and ${result.options} pricing option(s), but ${result.errors.length} item(s) failed:\n\n${result.errors.slice(0, 5).join('\n')}\n\nClick again to retry just those.`);
+    }
+  } else if (result.errors?.length) {
+    alert(`Sync failed:\n\n${result.errors.slice(0, 5).join('\n')}`);
+  } else {
+    alert('Everything from the starter catalog is already here — nothing new to add.');
+  }
+  btn.disabled = false;
+  btn.textContent = idleLabel;
+}
+
+$('#btn-reimport-catalog-top').addEventListener('click', () => runCatalogSync($('#btn-reimport-catalog-top'), '⟳ Sync starter catalog'));
+
 async function loadServices() {
   const q = $('#service-search').value;
   allServices = await api('/services' + (q ? '?q=' + encodeURIComponent(q) : ''));
@@ -476,17 +496,7 @@ async function loadServices() {
         No services yet. Click “+ Add service” to build your info book — pricing, timings, commissions, everything in one place.<br><br>
         <button class="btn btn-primary btn-sm" id="btn-reimport-catalog">⟳ Import starter catalog</button>
       </div>`;
-    $('#btn-reimport-catalog')?.addEventListener('click', async (e) => {
-      e.target.disabled = true;
-      e.target.textContent = 'Importing…';
-      const result = await api('/services/reimport', { method: 'POST' });
-      if (result.ok) loadServices();
-      else {
-        alert(result.error ? `Import failed: ${result.error}` : 'Nothing to import — the catalog may already be loaded elsewhere.');
-        e.target.disabled = false;
-        e.target.textContent = '⟳ Import starter catalog';
-      }
-    });
+    $('#btn-reimport-catalog')?.addEventListener('click', () => runCatalogSync($('#btn-reimport-catalog'), '⟳ Import starter catalog'));
     return;
   }
 
