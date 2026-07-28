@@ -224,7 +224,10 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--aqua); outl
 .quoted-toggle:hover { text-decoration: underline; }
 
 .reply-box { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
-.reply-box textarea { min-height: 74px; resize: none; overflow: hidden; }
+/* auto-grows up to a max height (see autoGrow() in app.js); overflow-y:auto
+   (not hidden) so text past that cap scrolls within the box instead of
+   just vanishing off the bottom */
+.reply-box textarea { min-height: 74px; resize: none; overflow-y: auto; }
 .reply-actions { display: flex; align-items: center; gap: 10px; }
 .reply-hint { font-size: .8rem; color: var(--muted); }
 .reply-hint a { color: var(--aqua-dark); }
