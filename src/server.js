@@ -111,6 +111,24 @@ app.post('/api/gmail/import-recent', async (req, res) => {
   }
 });
 
+// Push every confirmed, dated lead to Google Calendar in one pass — useful
+// right after connecting, or as a manual "make sure everything's synced".
+app.post('/api/calendar/sync-confirmed', async (req, res) => {
+  if (!gmail.hasCalendarScope()) {
+    return res.status(400).json({ error: 'Google Calendar isn\'t connected — reconnect Gmail in Settings' });
+  }
+  const ids = db.prepare(`
+    SELECT id FROM leads WHERE booking_confirmed = 1 AND service_date IS NOT NULL`).all().map((r) => r.id);
+  let synced = 0;
+  const errors = [];
+  for (const id of ids) {
+    const err = await syncLeadToCalendar(id);
+    if (err) errors.push(`lead #${id}: ${err}`);
+    else synced++;
+  }
+  res.json({ ok: errors.length === 0, synced, total: ids.length, errors });
+});
+
 app.post('/api/gmail/disconnect', (req, res) => {
   gmail.disconnect();
   res.json({ ok: true });
@@ -191,7 +209,29 @@ app.post('/api/leads', (req, res) => {
   res.status(201).json(getLeadFull(info.lastInsertRowid));
 });
 
-app.patch('/api/leads/:id', (req, res) => {
+// Push a lead's calendar state to Google (create/update/delete the event as
+// needed) and persist the resulting event id. Never throws — a failure is
+// returned as a string so the caller can surface it without losing the save.
+async function syncLeadToCalendar(id) {
+  const full = getLeadFull(id);
+  if (!full) return null;
+  try {
+    if (full.booking_confirmed && full.service_date) {
+      const eventId = await gmail.upsertCalendarEvent(full);
+      if (eventId !== full.gcal_event_id) {
+        db.prepare(`UPDATE leads SET gcal_event_id = ? WHERE id = ?`).run(eventId, id);
+      }
+    } else if (full.gcal_event_id) {
+      await gmail.deleteCalendarEvent(full.gcal_event_id);
+      db.prepare(`UPDATE leads SET gcal_event_id = NULL WHERE id = ?`).run(id);
+    }
+    return null;
+  } catch (err) {
+    return err.message;
+  }
+}
+
+app.patch('/api/leads/:id', async (req, res) => {
   const id = req.params.id;
   const lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(id);
   if (!lead) return res.status(404).json({ error: 'Not found' });
@@ -225,15 +265,23 @@ app.patch('/api/leads/:id', (req, res) => {
     }
   }
   touchLead(id);
-  res.json(getLeadFull(id));
+
+  let calendar_sync_error = null;
+  if (booking_confirmed !== undefined || service_date !== undefined) {
+    calendar_sync_error = await syncLeadToCalendar(id);
+  }
+  res.json({ ...getLeadFull(id), calendar_sync_error });
 });
 
-app.delete('/api/leads/:id', (req, res) => {
+app.delete('/api/leads/:id', async (req, res) => {
   // Remember every thread of this lead so a sync doesn't re-import it.
-  const lead = db.prepare(`SELECT gmail_thread_id FROM leads WHERE id = ?`).get(req.params.id);
+  const lead = db.prepare(`SELECT gmail_thread_id, gcal_event_id FROM leads WHERE id = ?`).get(req.params.id);
   if (lead?.gmail_thread_id) markThreadProcessed(lead.gmail_thread_id);
   for (const t of db.prepare(`SELECT thread_id FROM lead_threads WHERE lead_id = ?`).all(req.params.id)) {
     markThreadProcessed(t.thread_id);
+  }
+  if (lead?.gcal_event_id) {
+    try { await gmail.deleteCalendarEvent(lead.gcal_event_id); } catch { /* best effort */ }
   }
   db.prepare(`DELETE FROM leads WHERE id = ?`).run(req.params.id);
   res.json({ ok: true });

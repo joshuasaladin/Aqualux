@@ -374,6 +374,11 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--aqua); outl
 .gmail-connected { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .gmail-connected .who { font-weight: 650; color: var(--navy); }
 .sync-err { color: var(--red); font-size: .85rem; margin-top: 8px; }
+.settings-divider { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
+.gcal-badge {
+  display: inline-block; margin: 10px 0; font-size: .82rem; color: var(--amber);
+  background: #fdf3dd; border-radius: 999px; padding: 4px 12px;
+}
 
 /* --------------------------------------------------------------- modal --- */
 .modal-backdrop {

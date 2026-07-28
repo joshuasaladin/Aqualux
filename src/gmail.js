@@ -10,8 +10,11 @@
 import crypto from 'node:crypto';
 import { db, getSetting, setSetting, deleteSetting, upsertClient, touchLead, markThreadProcessed } from './db.js';
 
-const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send';
+const SCOPES = 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/calendar.events';
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
+const CAL_API = 'https://www.googleapis.com/calendar/v3';
+// Google Calendar's "Banana" color — the closest built-in option to yellow.
+const CAL_COLOR_ID = '5';
 
 // Bulk/marketing sender addresses — never real people.
 const SKIP_SENDERS = /no[-._]?reply|donotreply|mailer-daemon|notifications?@|newsletter|marketing@|promo(?:tions?)?@|offers?@|deals@|@e?mail\.|@e\./i;
@@ -43,6 +46,11 @@ export function isConnected() {
   return !!getSetting('gmail_tokens');
 }
 
+export function hasCalendarScope() {
+  const scope = getSetting('gmail_granted_scope', '');
+  return scope.includes('calendar');
+}
+
 export function connectionInfo() {
   const creds = getCredentials();
   return {
@@ -50,7 +58,8 @@ export function connectionInfo() {
     connected: isConnected(),
     email: getSetting('gmail_email', null),
     last_sync: getSetting('gmail_last_sync', null),
-    last_sync_error: getSetting('gmail_last_sync_error', null)
+    last_sync_error: getSetting('gmail_last_sync_error', null),
+    calendar_connected: isConnected() && hasCalendarScope()
   };
 }
 
@@ -90,6 +99,10 @@ export async function handleCallback(code, state, redirectUri) {
   }
   tokens.expires_at = Date.now() + (tokens.expires_in - 60) * 1000;
   setSetting('gmail_tokens', tokens);
+  // Google only returns the granted scopes on THIS response, not on refresh —
+  // record it so we can tell whether Calendar access was actually granted
+  // (a user connected before Calendar sync existed won't have it yet).
+  setSetting('gmail_granted_scope', tokens.scope || '');
 
   const profile = await apiGet('/profile');
   setSetting('gmail_email', profile.emailAddress);
@@ -100,12 +113,13 @@ export async function handleCallback(code, state, redirectUri) {
 }
 
 export function disconnect() {
-  for (const k of ['gmail_tokens', 'gmail_email', 'gmail_last_sync', 'gmail_last_sync_error', 'gmail_sync_since']) {
+  for (const k of ['gmail_tokens', 'gmail_email', 'gmail_last_sync', 'gmail_last_sync_error',
+                    'gmail_sync_since', 'gmail_granted_scope']) {
     deleteSetting(k);
   }
 }
 
-async function accessToken() {
+export async function accessToken() {
   const tokens = getSetting('gmail_tokens');
   if (!tokens) throw new Error('Gmail is not connected');
   if (Date.now() < tokens.expires_at) return tokens.access_token;
@@ -638,6 +652,74 @@ export async function sendReply(lead, client, bodyText, attachments = []) {
   recomputeStatus(lead.id);
   touchLead(lead.id);
   return sent;
+}
+
+// ---------------------------------------------------------- calendar sync --
+/**
+ * One-way sync: confirmed bookings -> a yellow all-day event on the
+ * connected Google Calendar. The CRM's own Calendar tab never reads
+ * anything back from Google — it only ever shows the CRM's own confirmed
+ * leads, exactly as before this existed.
+ */
+async function calApiRequest(path, options = {}) {
+  const token = await accessToken();
+  const res = await fetch(CAL_API + path, {
+    ...options,
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(options.headers || {}) }
+  });
+  if (res.status === 204) return {};
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error?.message || `Google Calendar API error ${res.status}`);
+  return data;
+}
+
+function calendarEventBody(lead) {
+  const lines = [
+    lead.client_email ? `Client: ${lead.client_name} <${lead.client_email}>` : `Client: ${lead.client_name}`,
+    lead.client_phone ? `Phone: ${lead.client_phone}` : null,
+    lead.party_size ? `Party size: ${lead.party_size}` : null,
+    `Paid: ${lead.paid ? 'Yes' : 'No'}`,
+    lead.notes ? `Notes: ${lead.notes}` : null
+  ].filter(Boolean);
+  // next-day exclusive end date, per the Calendar API's all-day event format
+  const end = new Date(lead.service_date + 'T00:00:00');
+  end.setDate(end.getDate() + 1);
+  return {
+    summary: `${lead.service || 'Booking'} — ${lead.client_name}`,
+    description: lines.join('\n'),
+    start: { date: lead.service_date },
+    end: { date: end.toISOString().slice(0, 10) },
+    colorId: CAL_COLOR_ID
+  };
+}
+
+/** Create or update the Google Calendar event for a confirmed, dated lead. */
+export async function upsertCalendarEvent(lead) {
+  if (!hasCalendarScope()) throw new Error('Google Calendar isn\'t connected — reconnect Gmail in Settings to grant calendar access');
+  const body = calendarEventBody(lead);
+  if (lead.gcal_event_id) {
+    try {
+      const updated = await calApiRequest(`/calendars/primary/events/${lead.gcal_event_id}`, {
+        method: 'PATCH', body: JSON.stringify(body)
+      });
+      return updated.id;
+    } catch (err) {
+      // event was deleted on the Google Calendar side — recreate it below
+      if (!/not found|404/i.test(err.message)) throw err;
+    }
+  }
+  const created = await calApiRequest('/calendars/primary/events', { method: 'POST', body: JSON.stringify(body) });
+  return created.id;
+}
+
+/** Remove a lead's event from Google Calendar (booking un-confirmed/deleted). */
+export async function deleteCalendarEvent(eventId) {
+  if (!eventId || !hasCalendarScope()) return;
+  try {
+    await calApiRequest(`/calendars/primary/events/${eventId}`, { method: 'DELETE' });
+  } catch (err) {
+    if (!/not found|404|410/i.test(err.message)) throw err;
+  }
 }
 
 // ------------------------------------------------------------ polling -----

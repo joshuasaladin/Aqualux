@@ -809,6 +809,7 @@ async function openLead(id) {
           <input type="checkbox" id="d-confirmed" ${l.booking_confirmed ? 'checked' : ''}> Booking confirmed ${l.booking_confirmed ? '✓' : ''}
         </label>
       </div>
+      ${l.gcal_event_id ? `<div class="gcal-badge">🗓️ Synced to Google Calendar (yellow)</div>` : ''}
       <button class="btn btn-primary btn-sm" id="d-save">Save</button>
       <span class="send-status" id="d-save-status"></span>
     </div>
@@ -889,7 +890,7 @@ async function openLead(id) {
 
   $('#d-save').addEventListener('click', async () => {
     $('#d-save-status').textContent = 'Saving…';
-    await api('/leads/' + id, {
+    const saved = await api('/leads/' + id, {
       method: 'PATCH',
       body: JSON.stringify({
         service: $('#d-service').value,
@@ -901,6 +902,9 @@ async function openLead(id) {
         services: collectServices()
       })
     });
+    if (saved.calendar_sync_error) {
+      alert('Saved, but Google Calendar sync failed: ' + saved.calendar_sync_error);
+    }
     openLead(id);
     refreshCurrentView();
   });
@@ -1110,7 +1114,22 @@ async function loadSettings() {
       <p class="reply-hint">New incoming emails become leads automatically (checked every few minutes).
         Replies you send here go out through your Gmail and land in your Sent folder.
         ${s.last_sync ? `Last sync: ${fmtDateTime(s.last_sync)}.` : ''}</p>
-      ${s.last_sync_error ? `<div class="sync-err">Last sync error: ${esc(s.last_sync_error)}</div>` : ''}`;
+      ${s.last_sync_error ? `<div class="sync-err">Last sync error: ${esc(s.last_sync_error)}</div>` : ''}
+      <hr class="settings-divider">
+      ${s.calendar_connected ? `
+        <div class="gmail-connected">
+          <span class="dot dot-on"></span>
+          <span class="who">Google Calendar connected</span>
+          <button class="btn btn-sm" id="s-cal-sync">🗓️ Sync confirmed bookings now</button>
+        </div>
+        <p class="reply-hint">Every confirmed, dated booking syncs to your Google Calendar automatically as a <b>yellow</b> all-day event. The CRM's own Calendar tab never reads anything back — it stays showing just your confirmed bookings.</p>
+        <span class="send-status" id="s-cal-status"></span>` : `
+        <div class="gmail-connected">
+          <span class="dot dot-off"></span>
+          <span class="who">Google Calendar needs one more permission</span>
+          <button class="btn btn-sm btn-primary" id="s-cal-reconnect">Grant calendar access</button>
+        </div>
+        <p class="reply-hint">You connected Gmail before calendar sync existed, so it wasn't included. Click the button (and make sure the <a href="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com" target="_blank">Google Calendar API</a> is enabled in your project first) to grant it — one more Google consent screen, nothing else changes.</p>`}`;
     $('#s-sync').addEventListener('click', async (e) => {
       e.target.disabled = true;
       try { await api('/gmail/sync', { method: 'POST' }); loadSettings(); }
@@ -1123,19 +1142,39 @@ async function loadSettings() {
       catch (err) { alert('Import failed: ' + err.message); e.target.disabled = false; }
     });
     $('#s-disconnect').addEventListener('click', async () => {
-      if (!confirm('Disconnect Gmail? Existing leads stay; new emails stop syncing.')) return;
+      if (!confirm('Disconnect Gmail? Existing leads stay; new emails and calendar sync stop.')) return;
       await api('/gmail/disconnect', { method: 'POST' });
       loadSettings();
+    });
+    $('#s-cal-sync')?.addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      e.target.textContent = 'Syncing…';
+      try {
+        const r = await api('/calendar/sync-confirmed', { method: 'POST' });
+        $('#s-cal-status').textContent = `Synced ${r.synced} of ${r.total} confirmed booking(s)${r.errors.length ? ` — ${r.errors.length} failed` : ' ✓'}`;
+        if (r.errors.length) { $('#s-cal-status').classList.add('err'); console.error(r.errors); }
+      } catch (err) {
+        $('#s-cal-status').classList.add('err');
+        $('#s-cal-status').textContent = 'Sync failed: ' + err.message;
+      }
+      e.target.disabled = false;
+      e.target.textContent = '🗓️ Sync confirmed bookings now';
+    });
+    $('#s-cal-reconnect')?.addEventListener('click', async () => {
+      try {
+        const { url } = await api('/gmail/auth-url');
+        window.location.href = url;
+      } catch (err) { alert(err.message); }
     });
     return;
   }
 
   panel.innerHTML = `
     <p class="reply-hint" style="margin-bottom:10px">
-      One-time setup (~5 minutes) so the CRM can read incoming inquiries and send replies from your Gmail:</p>
+      One-time setup (~5 minutes) so the CRM can read incoming inquiries, send replies from your Gmail, and sync confirmed bookings to Google Calendar:</p>
     <ol class="steps">
       <li>Go to <a href="https://console.cloud.google.com/apis/credentials" target="_blank">Google Cloud Console → Credentials</a> (create a free project if asked).</li>
-      <li>Enable the <a href="https://console.cloud.google.com/apis/library/gmail.googleapis.com" target="_blank">Gmail API</a> for the project.</li>
+      <li>Enable the <a href="https://console.cloud.google.com/apis/library/gmail.googleapis.com" target="_blank">Gmail API</a> and the <a href="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com" target="_blank">Google Calendar API</a> for the project.</li>
       <li>Configure the OAuth consent screen (External), and add <b>your own Gmail address</b> as a test user.</li>
       <li>Create an <b>OAuth client ID</b> → type <b>Web application</b> → add this exact redirect URI:<br>
         <code>${esc(s.redirect_uri)}</code></li>
