@@ -669,12 +669,21 @@ async function calApiRequest(path, options = {}) {
   });
   if (res.status === 204) return {};
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error?.message || `Google Calendar API error ${res.status}`);
+  if (!res.ok) {
+    // Google's per-field validation errors live in error.errors[]; surface
+    // that detail (e.g. which field/reason) instead of just the generic
+    // top-level message, so a bad request is diagnosable from the message alone.
+    const detail = data.error?.errors?.map((e) => `${e.reason}: ${e.message}`).join('; ');
+    throw new Error(detail || data.error?.message || `Google Calendar API error ${res.status}`);
+  }
   return data;
 }
 
-// Aruba is fixed at UTC-4 year-round (no DST) — one IANA zone covers it.
-const ARUBA_TZ = 'America/Aruba';
+// Aruba is fixed at UTC-4 year-round (no DST). Using an explicit offset in
+// dateTime (rather than relying on Google recognizing an IANA zone name) is
+// unambiguous and can't be rejected as an unrecognized timezone string.
+const ARUBA_UTC_OFFSET = '-04:00';
+const ARUBA_TZ = 'America/Aruba'; // supplementary metadata only
 // No explicit end time is collected, so timed events get a default length.
 const DEFAULT_EVENT_MINUTES = 120;
 
@@ -706,8 +715,8 @@ function calendarEventBody(lead) {
     const endPoint = addMinutesToTime(lead.service_date, lead.service_time, DEFAULT_EVENT_MINUTES);
     return {
       summary, description, colorId: CAL_COLOR_ID,
-      start: { dateTime: `${lead.service_date}T${lead.service_time}:00`, timeZone: ARUBA_TZ },
-      end: { dateTime: `${endPoint.date}T${endPoint.time}:00`, timeZone: ARUBA_TZ }
+      start: { dateTime: `${lead.service_date}T${lead.service_time}:00${ARUBA_UTC_OFFSET}`, timeZone: ARUBA_TZ },
+      end: { dateTime: `${endPoint.date}T${endPoint.time}:00${ARUBA_UTC_OFFSET}`, timeZone: ARUBA_TZ }
     };
   }
 
