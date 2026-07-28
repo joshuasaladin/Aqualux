@@ -199,13 +199,13 @@ app.get('/api/leads/:id', (req, res) => {
 });
 
 app.post('/api/leads', (req, res) => {
-  const { name, email, phone = '', service = '', service_date = null, price = 0 } = req.body || {};
+  const { name, email, phone = '', service = '', service_date = null, service_time = null, price = 0 } = req.body || {};
   if (!name || !email) return res.status(400).json({ error: 'name and email are required' });
   const client = upsertClient({ name, email, phone });
   const info = db.prepare(`
-    INSERT INTO leads (client_id, subject, service, service_date, price)
-    VALUES (?, ?, ?, ?, ?)`)
-    .run(client.id, service, service, service_date || null, Number(price) || 0);
+    INSERT INTO leads (client_id, subject, service, service_date, service_time, price)
+    VALUES (?, ?, ?, ?, ?, ?)`)
+    .run(client.id, service, service, service_date || null, service_time || null, Number(price) || 0);
   res.status(201).json(getLeadFull(info.lastInsertRowid));
 });
 
@@ -235,10 +235,13 @@ app.patch('/api/leads/:id', async (req, res) => {
   const id = req.params.id;
   const lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(id);
   if (!lead) return res.status(404).json({ error: 'Not found' });
-  const { service, service_date, paid, booking_confirmed, price, notes, status, party_size, services } = req.body || {};
+  const { service, service_date, service_time, paid, booking_confirmed, price, notes, status, party_size, services } = req.body || {};
   if (service !== undefined) db.prepare(`UPDATE leads SET service = ? WHERE id = ?`).run(service, id);
   if (service_date !== undefined) {
     db.prepare(`UPDATE leads SET service_date = ? WHERE id = ?`).run(service_date || null, id);
+  }
+  if (service_time !== undefined) {
+    db.prepare(`UPDATE leads SET service_time = ? WHERE id = ?`).run(service_time || null, id);
   }
   if (paid !== undefined) db.prepare(`UPDATE leads SET paid = ? WHERE id = ?`).run(paid ? 1 : 0, id);
   if (booking_confirmed !== undefined) {
@@ -267,7 +270,7 @@ app.patch('/api/leads/:id', async (req, res) => {
   touchLead(id);
 
   let calendar_sync_error = null;
-  if (booking_confirmed !== undefined || service_date !== undefined) {
+  if (booking_confirmed !== undefined || service_date !== undefined || service_time !== undefined) {
     calendar_sync_error = await syncLeadToCalendar(id);
   }
   res.json({ ...getLeadFull(id), calendar_sync_error });
@@ -496,7 +499,7 @@ app.get('/api/calendar', (req, res) => {
   if (!from || !to) return res.status(400).json({ error: 'from and to are required (YYYY-MM-DD)' });
   const rows = db.prepare(`${LEAD_SELECT}
     WHERE l.booking_confirmed = 1 AND l.service_date BETWEEN ? AND ?
-    ORDER BY l.service_date ASC`).all(from, to);
+    ORDER BY l.service_date ASC, l.service_time ASC`).all(from, to);
   res.json(rows);
 });
 

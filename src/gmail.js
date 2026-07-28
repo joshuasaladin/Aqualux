@@ -673,6 +673,24 @@ async function calApiRequest(path, options = {}) {
   return data;
 }
 
+// Aruba is fixed at UTC-4 year-round (no DST) — one IANA zone covers it.
+const ARUBA_TZ = 'America/Aruba';
+// No explicit end time is collected, so timed events get a default length.
+const DEFAULT_EVENT_MINUTES = 120;
+
+/** "14:30" + 120 -> { date: same-or-next-day, time: "16:30" }, handling midnight rollover. */
+function addMinutesToTime(dateStr, timeStr, minutes) {
+  const [h, m] = timeStr.split(':').map(Number);
+  const total = h * 60 + m + minutes;
+  const dayOffset = Math.floor(total / 1440);
+  const wrapped = ((total % 1440) + 1440) % 1440;
+  const date = new Date(dateStr + 'T00:00:00');
+  date.setDate(date.getDate() + dayOffset);
+  const hh = String(Math.floor(wrapped / 60)).padStart(2, '0');
+  const mm = String(wrapped % 60).padStart(2, '0');
+  return { date: date.toISOString().slice(0, 10), time: `${hh}:${mm}` };
+}
+
 function calendarEventBody(lead) {
   const lines = [
     lead.client_email ? `Client: ${lead.client_name} <${lead.client_email}>` : `Client: ${lead.client_name}`,
@@ -681,15 +699,25 @@ function calendarEventBody(lead) {
     `Paid: ${lead.paid ? 'Yes' : 'No'}`,
     lead.notes ? `Notes: ${lead.notes}` : null
   ].filter(Boolean);
-  // next-day exclusive end date, per the Calendar API's all-day event format
+  const summary = `${lead.service || 'Booking'} — ${lead.client_name}`;
+  const description = lines.join('\n');
+
+  if (lead.service_time) {
+    const endPoint = addMinutesToTime(lead.service_date, lead.service_time, DEFAULT_EVENT_MINUTES);
+    return {
+      summary, description, colorId: CAL_COLOR_ID,
+      start: { dateTime: `${lead.service_date}T${lead.service_time}:00`, timeZone: ARUBA_TZ },
+      end: { dateTime: `${endPoint.date}T${endPoint.time}:00`, timeZone: ARUBA_TZ }
+    };
+  }
+
+  // No specific time -> all-day event (next-day exclusive end date, per the API).
   const end = new Date(lead.service_date + 'T00:00:00');
   end.setDate(end.getDate() + 1);
   return {
-    summary: `${lead.service || 'Booking'} — ${lead.client_name}`,
-    description: lines.join('\n'),
+    summary, description, colorId: CAL_COLOR_ID,
     start: { date: lead.service_date },
-    end: { date: end.toISOString().slice(0, 10) },
-    colorId: CAL_COLOR_ID
+    end: { date: end.toISOString().slice(0, 10) }
   };
 }
 

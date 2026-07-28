@@ -51,14 +51,22 @@ function fmtDateTime(iso) {
   return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 }
 
-function svcDateBadge(dateStr) {
+function fmtTime(timeStr) {
+  if (!timeStr) return '';
+  const [h, m] = timeStr.split(':').map(Number);
+  const d = new Date(2000, 0, 1, h, m);
+  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
+function svcDateBadge(dateStr, timeStr) {
   if (!dateStr) return `<span class="svc-date none">no date</span>`;
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const d = new Date(dateStr + 'T00:00:00');
   const days = Math.round((d - today) / 86400000);
   const label = d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   const rel = days === 0 ? 'today' : days === 1 ? 'tomorrow' : days > 1 ? `in ${days}d` : `${-days}d ago`;
-  return `<span class="svc-date ${days >= 0 && days <= 3 ? 'soon' : ''}">📅 ${label} · ${rel}</span>`;
+  const time = timeStr ? ` · ${fmtTime(timeStr)}` : '';
+  return `<span class="svc-date ${days >= 0 && days <= 3 ? 'soon' : ''}">📅 ${label}${time} · ${rel}</span>`;
 }
 
 /**
@@ -291,7 +299,7 @@ function leadCard(l) {
       <span class="card-right">
         ${total ? `<span class="card-amount">${money(total)}${owed > 0 && owed < total ?
           ` <span class="owed">(${money(owed)} due)</span>` : ''}</span>` : ''}
-        ${svcDateBadge(l.service_date)}
+        ${svcDateBadge(l.service_date, l.service_time)}
       </span>
     </div>
     <div class="card-sub">✉️ ${esc(l.client_email)}${l.party_size ? ` · 👥 ${l.party_size}` : ''} · ${esc(l.service || l.subject || '—')}
@@ -383,8 +391,8 @@ async function renderCalendar() {
     const dateStr = `${calYear}-${pad(calMonth + 1)}-${pad(d)}`;
     const evts = (byDay[dateStr] || []).map((e) => `
       <div class="cal-evt ${e.paid ? '' : 'unpaid'}" data-lead="${e.id}"
-           title="${esc(e.client_name)} — ${esc(e.service)}${e.paid ? '' : ' (unpaid)'}">
-        ${esc(e.client_name.split(' ')[0])}: ${esc(e.service)}
+           title="${e.service_time ? fmtTime(e.service_time) + ' — ' : ''}${esc(e.client_name)} — ${esc(e.service)}${e.paid ? '' : ' (unpaid)'}">
+        ${e.service_time ? `<b>${fmtTime(e.service_time)}</b> ` : ''}${esc(e.client_name.split(' ')[0])}: ${esc(e.service)}
       </div>`).join('');
     cells += `<div class="cal-cell ${dateStr === todayStr ? 'today' : ''}"><div class="d">${d}</div>${evts}</div>`;
   }
@@ -795,12 +803,13 @@ async function openLead(id) {
       <h3>Booking</h3>
       <div class="form-row">
         <label>Service requested<input id="d-service" value="${esc(l.service)}" placeholder="e.g. Yacht charter"></label>
-        <label>Service date<input id="d-date" type="date" value="${l.service_date || ''}"></label>
+        <label>How many people<input id="d-party" type="number" min="1" step="1" value="${l.party_size || ''}" placeholder="e.g. 8"></label>
       </div>
       <div class="form-row">
-        <label>How many people<input id="d-party" type="number" min="1" step="1" value="${l.party_size || ''}" placeholder="e.g. 8"></label>
-        <label>Notes<input id="d-notes" value="${esc(l.notes)}" placeholder="Internal notes…"></label>
+        <label>Service date<input id="d-date" type="date" value="${l.service_date || ''}"></label>
+        <label>Start time<input id="d-time" type="time" value="${l.service_time || ''}"></label>
       </div>
+      <label>Notes<input id="d-notes" value="${esc(l.notes)}" placeholder="Internal notes…"></label>
       <div class="toggle-row">
         <label class="toggle ${l.paid ? 'on-paid' : ''}">
           <input type="checkbox" id="d-paid" ${l.paid ? 'checked' : ''}> Paid ${l.paid ? '✓' : ''}
@@ -895,6 +904,7 @@ async function openLead(id) {
       body: JSON.stringify({
         service: $('#d-service').value,
         service_date: $('#d-date').value || null,
+        service_time: $('#d-time').value || null,
         party_size: $('#d-party').value || null,
         paid: $('#d-paid').checked,
         booking_confirmed: $('#d-confirmed').checked,
@@ -1031,7 +1041,7 @@ async function openClient(id) {
             <div class="card-top">
               <span class="card-title">${esc(l.service || l.subject || '—')}</span>
               ${statusBadge(l.status)} ${payBadge(l.paid)} ${bookBadge(l.booking_confirmed)}
-              <span class="card-right">${svcDateBadge(l.service_date)}</span>
+              <span class="card-right">${svcDateBadge(l.service_date, l.service_time)}</span>
             </div>
           </div>`).join('') : '<div class="empty">No leads yet.</div>'}
       </div>
