@@ -140,7 +140,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--aqua); outl
 /* -------------------------------------------------------------- drawer --- */
 .drawer-backdrop { position: fixed; inset: 0; background: rgba(11, 31, 51, .45); z-index: 30; }
 .drawer {
-  position: fixed; top: 0; right: 0; bottom: 0; width: min(880px, 100vw);
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(1320px, 100vw);
   background: var(--bg); z-index: 31; overflow-y: auto;
   box-shadow: -6px 0 24px rgba(11, 31, 51, .25);
 }
@@ -178,8 +178,13 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--aqua); outl
 
 /* ---------------------------------------------------------- conversation - */
 .thread { display: flex; flex-direction: column; gap: 10px; }
-.msg { max-width: 85%; border-radius: 12px; padding: 10px 14px; font-size: .9rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* capped in px too, so a wide drawer doesn't stretch bubbles into
+   uncomfortably long reading lines */
+.msg { max-width: min(85%, 640px); border-radius: 12px; padding: 10px 14px; font-size: .9rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg .m-meta { font-size: .74rem; margin-bottom: 4px; opacity: .75; }
+/* the newest message can scroll internally when it's long, so the reply
+   box stays close by instead of being pushed far down the page */
+.thread-latest .msg { max-height: 42vh; overflow-y: auto; }
 .quoted-toggle {
   margin-top: 8px; font-size: .76rem; cursor: pointer; user-select: none;
   color: var(--aqua-dark); opacity: .9;
