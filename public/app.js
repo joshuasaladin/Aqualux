@@ -85,17 +85,113 @@ function stripQuoted(body) {
   return { text, hasQuoted: true };
 }
 
-function renderMsgBubble(m, l) {
+/* ------------------------------------------------ Gmail-style thread --- */
+// Older messages collapse to one line (avatar, sender, snippet, date) like
+// Gmail; the newest message opens expanded. Click a row to toggle it.
+const expandedMsgSets = new Map(); // leadId -> Set<messageId> manually toggled open/closed since default
+
+const AVATAR_HUES = [200, 260, 20, 150, 320, 40, 280];
+function hueForName(name) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return AVATAR_HUES[h % AVATAR_HUES.length];
+}
+
+function extractAttachments(body) {
+  const m = body.match(/\n\n📎 (.+)$/);
+  if (!m) return { text: body, attachments: [] };
+  return { text: body.slice(0, m.index), attachments: m[1].split(', ') };
+}
+
+function msgSnippet(text) {
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  return oneLine.length > 100 ? oneLine.slice(0, 100) + '…' : oneLine;
+}
+
+function renderThreadRow(m, l, isOpen) {
   const isFormSubmission = m.body.startsWith('Website form submission');
+  const { text: withoutAttach, attachments } = extractAttachments(m.body);
   const { text, hasQuoted } = isFormSubmission
-    ? { text: m.body, hasQuoted: false } : stripQuoted(m.body);
-  return `
-    <div class="msg ${m.direction}">
-      ${isFormSubmission ? '' :
-        `<div class="m-meta">${m.direction === 'in' ? esc(l.client_name) : 'You'} · ${fmtDateTime(m.sent_at)}</div>`}
-      <span class="msg-text">${esc(text)}</span>
-      ${hasQuoted ? `<div class="quoted-toggle" data-mid="${m.id}">Show quoted history ⌄</div>` : ''}
+    ? { text: withoutAttach, hasQuoted: false } : stripQuoted(withoutAttach);
+
+  const senderName = isFormSubmission ? 'Website form' : (m.direction === 'in' ? l.client_name : 'You');
+  const initial = senderName.trim()[0]?.toUpperCase() || '?';
+  const avatarStyle = m.direction === 'out'
+    ? `background: var(--aqua-dark)`
+    : `background: hsl(${hueForName(l.client_name)}, 55%, 42%)`;
+  const attachChip = attachments.length
+    ? `<span class="gmail-attach-chip">📎 ${attachments.map(esc).join(', ')}</span>` : '';
+
+  if (!isOpen) {
+    return `
+    <div class="gmail-row collapsed" data-mid="${m.id}">
+      <div class="gmail-avatar" style="${avatarStyle}">${esc(initial)}</div>
+      <div class="gmail-row-main">
+        <span class="gmail-sender">${esc(senderName)}</span>
+        <span class="gmail-snippet">${esc(msgSnippet(text))}${attachments.length ? ' 📎' : ''}</span>
+        <span class="gmail-date">${timeAgo(m.sent_at)}</span>
+      </div>
     </div>`;
+  }
+  return `
+    <div class="gmail-row expanded" data-mid="${m.id}">
+      <div class="gmail-avatar" style="${avatarStyle}">${esc(initial)}</div>
+      <div class="gmail-row-main">
+        <div class="gmail-row-head" data-collapse="${m.id}">
+          <span class="gmail-sender">${esc(senderName)}</span>
+          <span class="gmail-date">${fmtDateTime(m.sent_at)}</span>
+        </div>
+        <div class="gmail-body">${esc(text)}</div>
+        ${attachChip}
+        ${hasQuoted ? `<div class="quoted-toggle" data-mid="${m.id}">Show quoted history ⌄</div>` : ''}
+      </div>
+    </div>`;
+}
+
+function renderGmailThread(l) {
+  if (!l.messages.length) return '<div class="empty">No emails on this lead yet.</div>';
+  if (!expandedMsgSets.has(l.id)) expandedMsgSets.set(l.id, new Set());
+  const manual = expandedMsgSets.get(l.id);
+  const lastId = l.messages[l.messages.length - 1].id;
+  return `<div class="gmail-thread" id="gmail-thread">${
+    l.messages.map((m) => {
+      const isDefaultOpen = m.id === lastId;
+      // a message is open if (default-open) XOR (explicitly toggled by a click)
+      const open = manual.has(m.id) ? !isDefaultOpen : isDefaultOpen;
+      return renderThreadRow(m, l, open);
+    }).join('')
+  }</div>`;
+}
+
+function bindGmailThreadEvents(l) {
+  const manual = expandedMsgSets.get(l.id) || new Set();
+  document.querySelectorAll('.gmail-row.collapsed[data-mid]').forEach((el) =>
+    el.addEventListener('click', () => {
+      manual.has(Number(el.dataset.mid)) ? manual.delete(Number(el.dataset.mid)) : manual.add(Number(el.dataset.mid));
+      expandedMsgSets.set(l.id, manual);
+      $('#gmail-thread').outerHTML = renderGmailThread(l);
+      bindGmailThreadEvents(l);
+    }));
+  document.querySelectorAll('.gmail-row-head[data-collapse]').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = Number(el.dataset.collapse);
+      manual.has(id) ? manual.delete(id) : manual.add(id);
+      expandedMsgSets.set(l.id, manual);
+      $('#gmail-thread').outerHTML = renderGmailThread(l);
+      bindGmailThreadEvents(l);
+    }));
+  document.querySelectorAll('.gmail-row .quoted-toggle').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const m = l.messages.find((msg) => msg.id === Number(el.dataset.mid));
+      const bodyEl = el.parentElement.querySelector('.gmail-body');
+      const { text: withoutAttach } = extractAttachments(m.body);
+      const expanded = el.dataset.expanded === '1';
+      bodyEl.textContent = expanded ? stripQuoted(withoutAttach).text : withoutAttach;
+      el.dataset.expanded = expanded ? '0' : '1';
+      el.textContent = expanded ? 'Show quoted history ⌄' : 'Hide quoted history ⌃';
+    }));
 }
 
 const statusBadge = (s) => `<span class="badge st-${s}">${STATUS_LABELS[s] || s}</span>`;
@@ -727,11 +823,8 @@ async function openLead(id) {
 
     <div class="panel">
       <h3>Conversation</h3>
-      <div class="thread thread-latest">
-        ${l.messages.length ? renderMsgBubble(l.messages[l.messages.length - 1], l)
-          : '<div class="empty">No emails on this lead yet.</div>'}
-      </div>
-      <div class="reply-box">
+      ${renderGmailThread(l)}
+      <div class="reply-box" id="reply-box-anchor">
         <textarea id="d-reply" placeholder="Write your reply — it sends from your Gmail…" ${canEmail ? '' : 'disabled'}></textarea>
         <div id="d-file-list" class="file-list"></div>
         <div class="reply-actions">
@@ -743,11 +836,6 @@ async function openLead(id) {
             'Connect Gmail in <a href="#" id="goto-settings">Settings</a> to send emails from here.'}</span>
         </div>
       </div>
-      ${l.messages.length > 1 ? `
-        <div class="older-toggle" id="older-toggle">▾ Show ${l.messages.length - 1} earlier message${l.messages.length - 1 === 1 ? '' : 's'}</div>
-        <div class="thread thread-older hidden" id="thread-older">
-          ${l.messages.slice(0, -1).reverse().map((m) => renderMsgBubble(m, l)).join('')}
-        </div>` : ''}
     </div>
 
     <button class="btn btn-danger btn-sm" id="d-delete">Delete lead</button>
@@ -757,6 +845,7 @@ async function openLead(id) {
   $('#goto-settings')?.addEventListener('click', (e) => {
     e.preventDefault(); closeDrawer(); showView('settings');
   });
+  bindGmailThreadEvents(l);
 
   // --- services editor ---
   const svcRows = $('#svc-rows');
@@ -815,27 +904,6 @@ async function openLead(id) {
     openLead(id);
     refreshCurrentView();
   });
-
-  // --- show/hide earlier messages (newest message is always visible) ---
-  $('#older-toggle')?.addEventListener('click', () => {
-    const older = $('#thread-older');
-    const hidden = older.classList.toggle('hidden');
-    $('#older-toggle').textContent = hidden
-      ? `▾ Show ${l.messages.length - 1} earlier message${l.messages.length - 1 === 1 ? '' : 's'}`
-      : `▴ Hide earlier messages`;
-  });
-
-  // --- expand/collapse quoted history in bubbles ---
-  const msgById = Object.fromEntries(l.messages.map((m) => [String(m.id), m]));
-  document.querySelectorAll('#drawer-content .quoted-toggle').forEach((el) =>
-    el.addEventListener('click', () => {
-      const m = msgById[el.dataset.mid];
-      const textEl = el.parentElement.querySelector('.msg-text');
-      const expanded = el.dataset.expanded === '1';
-      textEl.textContent = expanded ? stripQuoted(m.body).text : m.body;
-      el.dataset.expanded = expanded ? '0' : '1';
-      el.textContent = expanded ? 'Show quoted history ⌄' : 'Hide quoted history ⌃';
-    }));
 
   // --- auto-expanding reply box ---
   const replyBox = $('#d-reply');
@@ -930,6 +998,8 @@ async function openLead(id) {
 
   $('#drawer').classList.remove('hidden');
   $('#drawer-backdrop').classList.remove('hidden');
+  // land on the latest message + reply box, like opening a thread in Gmail
+  setTimeout(() => $('#reply-box-anchor')?.scrollIntoView({ block: 'center' }), 50);
 }
 
 /* ------------------------------------------------------- client drawer --- */

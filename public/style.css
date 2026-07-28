@@ -177,30 +177,53 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--aqua); outl
 .toggle.on-confirmed { border-color: var(--aqua); background: #f0fafc; }
 
 /* ---------------------------------------------------------- conversation - */
-.thread { display: flex; flex-direction: column; gap: 10px; }
-/* capped in px too, so a wide drawer doesn't stretch bubbles into
-   uncomfortably long reading lines */
-.msg { max-width: min(85%, 640px); border-radius: 12px; padding: 10px 14px; font-size: .9rem; white-space: pre-wrap; overflow-wrap: anywhere; }
-.msg .m-meta { font-size: .74rem; margin-bottom: 4px; opacity: .75; }
-/* the newest message can scroll internally when it's long, so the reply
-   box stays close by instead of being pushed far down the page */
-.thread-latest .msg { max-height: 42vh; overflow-y: auto; }
+/* Gmail-style thread: chronological, older messages collapsed to one line
+   (avatar, sender, snippet, date), newest message open. Click a row to
+   toggle it, just like Gmail. */
+.gmail-thread { display: flex; flex-direction: column; }
+.gmail-row {
+  display: flex; gap: 12px; padding: 10px 4px; border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.gmail-row:last-child { border-bottom: none; }
+.gmail-row.expanded { cursor: default; padding-bottom: 16px; }
+.gmail-row.collapsed:hover { background: rgba(25, 167, 194, .06); }
+.gmail-avatar {
+  flex: none; width: 32px; height: 32px; border-radius: 50%; color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: .82rem; font-weight: 700; margin-top: 2px;
+}
+.gmail-row-main { flex: 1; min-width: 0; }
+
+/* collapsed row: sender, one-line snippet, date — all on one line like Gmail */
+.gmail-row.collapsed .gmail-row-main {
+  display: flex; align-items: baseline; gap: 8px; padding-top: 4px;
+}
+.gmail-row.collapsed .gmail-sender { flex: none; font-weight: 650; font-size: .88rem; color: var(--text); }
+.gmail-row.collapsed .gmail-snippet {
+  flex: 1; min-width: 0; color: var(--muted); font-size: .85rem;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.gmail-row.collapsed .gmail-date { flex: none; font-size: .78rem; color: var(--muted); }
+
+/* expanded row: sender/date header line, then full body below */
+.gmail-row-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; cursor: pointer; }
+.gmail-row.expanded .gmail-sender { font-weight: 650; font-size: .92rem; color: var(--text); }
+.gmail-row.expanded .gmail-date { font-size: .78rem; color: var(--muted); margin-left: auto; }
+.gmail-body {
+  font-size: .9rem; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text);
+  max-height: 42vh; overflow-y: auto; line-height: 1.5;
+}
+.gmail-attach-chip {
+  display: inline-block; margin-top: 8px; font-size: .8rem; color: var(--aqua-dark);
+  background: #e5f6fa; border-radius: 999px; padding: 3px 10px;
+}
 .quoted-toggle {
-  margin-top: 8px; font-size: .76rem; cursor: pointer; user-select: none;
-  color: var(--aqua-dark); opacity: .9;
+  margin-top: 8px; font-size: .76rem; cursor: pointer; user-select: none; color: var(--aqua-dark);
 }
 .quoted-toggle:hover { text-decoration: underline; }
-.msg.out .quoted-toggle { color: #d8f3f9; }
 
-.older-toggle {
-  text-align: center; font-size: .84rem; color: var(--aqua-dark); cursor: pointer;
-  padding: 10px 0; user-select: none; border-top: 1px dashed var(--border); margin-top: 12px;
-}
-.older-toggle:hover { text-decoration: underline; }
-.thread-older { margin-top: 10px; }
-.msg.in  { align-self: flex-start; background: #fff; border: 1px solid var(--border); border-bottom-left-radius: 4px; }
-.msg.out { align-self: flex-end; background: var(--aqua); color: #fff; border-bottom-right-radius: 4px; }
-.reply-box { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.reply-box { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
 .reply-box textarea { min-height: 74px; resize: none; overflow: hidden; }
 .reply-actions { display: flex; align-items: center; gap: 10px; }
 .reply-hint { font-size: .8rem; color: var(--muted); }
@@ -410,7 +433,12 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--aqua); outl
   .drawer-head h2 { font-size: 1rem; }
   .reply-actions { flex-wrap: wrap; }
   .reply-actions .btn, .reply-actions .btn-primary { flex: 1 1 auto; }
-  .msg { max-width: 92%; }
+  .gmail-avatar { width: 26px; height: 26px; font-size: .74rem; }
+  .gmail-row { gap: 8px; }
+  .gmail-row.collapsed .gmail-row-main { flex-wrap: wrap; }
+  .gmail-row.collapsed .gmail-snippet { flex-basis: 100%; order: 3; }
+  .gmail-row.expanded .gmail-date { margin-left: 0; }
+  .gmail-row-head { flex-wrap: wrap; }
 
   /* services book options editor: stack instead of squeezing 5 fields per row */
   .opt-row-line1 { flex-wrap: wrap; }
