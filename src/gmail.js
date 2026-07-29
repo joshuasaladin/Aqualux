@@ -223,16 +223,16 @@ export function parseFormSubmission(from, bodyText) {
   const lines = bodyText.split('\n').map((l) => l.trim());
   const fields = {};
   const order = [];
-  const isLabel = (l) => /^(.{1,60}?)\s*:\s*$/.test(l);
+  const isLabel = (l) => /^(.{1,160}?)\s*:\s*$/.test(l);
   for (let i = 0; i < lines.length; i++) {
     let label = null, value = '';
-    const block = lines[i].match(/^(.{1,60}?)\s*:\s*$/);
-    const inline = lines[i].match(/^(.{1,60}?):\s+(.+)$/);
+    const block = lines[i].match(/^(.{1,160}?)\s*:\s*$/);
+    const inline = lines[i].match(/^(.{1,160}?):\s+(.+)$/);
     if (block) {
       label = block[1];
       const vals = [];
       let j = i + 1;
-      while (j < lines.length && !isLabel(lines[j]) && !/^(.{1,60}?):\s+.+$/.test(lines[j])) {
+      while (j < lines.length && !isLabel(lines[j]) && !/^(.{1,160}?):\s+.+$/.test(lines[j])) {
         if (/^view submissions?$/i.test(lines[j])) break; // Wix footer button
         if (lines[j]) vals.push(lines[j]);
         j++;
@@ -553,6 +553,27 @@ async function apiSendRaw(rfc822, threadId) {
 }
 
 /** attachments: [{ filename, mimeType, data }] where data is plain base64. */
+/** 2 -> "2nd", 21 -> "21st", 13 -> "13th", etc. */
+function ordinal(n) {
+  const v = n % 100;
+  if (v >= 11 && v <= 13) return `${n}th`;
+  return `${n}${['th', 'st', 'nd', 'rd'][n % 10] || 'th'}`;
+}
+
+/** "2026-12-02" -> "December 2nd" */
+function formatServiceDateLong(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr + 'T00:00:00');
+  return `${d.toLocaleDateString('en-US', { month: 'long' })} ${ordinal(d.getDate())}`;
+}
+
+/** "Private Chef - December 2nd", or just the activity name with no date yet. */
+function buildEmailSubject(lead) {
+  const activity = lead.service || lead.subject || 'Aqualux booking';
+  const dateLabel = formatServiceDateLong(lead.service_date);
+  return dateLabel ? `${activity} - ${dateLabel}` : activity;
+}
+
 export async function sendReply(lead, client, bodyText, attachments = []) {
   const myEmail = getSetting('gmail_email');
   if (!myEmail) throw new Error('Gmail is not connected');
@@ -561,7 +582,7 @@ export async function sendReply(lead, client, bodyText, attachments = []) {
     SELECT * FROM messages WHERE lead_id = ? AND direction = 'in'
     ORDER BY sent_at DESC, id DESC LIMIT 1`).get(lead.id);
 
-  let subject = lead.subject || lead.service || 'Your Aqualux request';
+  let subject = buildEmailSubject(lead);
   if (lastIn && !/^re:/i.test(subject)) subject = 'Re: ' + subject;
 
   const headers = [
