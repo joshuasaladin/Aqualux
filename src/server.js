@@ -650,6 +650,28 @@ seedServiceCatalog();
   }
 }
 
+// One-time cleanup: remove leads created from Google Calendar RSVP
+// notifications ("Accepted: ...") before that filter existed.
+{
+  const rsvpLeadIds = db.prepare(`SELECT id, subject, gmail_thread_id, client_id FROM leads`).all()
+    .filter((l) => {
+      if (gmail.isCalendarNotification(l.subject, '')) return true;
+      const msgs = db.prepare(`SELECT body FROM messages WHERE lead_id = ?`).all(l.id);
+      return msgs.some((m) => gmail.isCalendarNotification('', m.body));
+    });
+  for (const l of rsvpLeadIds) {
+    if (l.gmail_thread_id) markThreadProcessed(l.gmail_thread_id);
+    for (const t of db.prepare(`SELECT thread_id FROM lead_threads WHERE lead_id = ?`).all(l.id)) {
+      markThreadProcessed(t.thread_id);
+    }
+    db.prepare(`DELETE FROM leads WHERE id = ?`).run(l.id);
+    // clean up the client too if this was their only lead
+    const remaining = db.prepare(`SELECT COUNT(*) n FROM leads WHERE client_id = ?`).get(l.client_id).n;
+    if (remaining === 0) db.prepare(`DELETE FROM clients WHERE id = ?`).run(l.client_id);
+    console.log(`Removed calendar-RSVP lead: "${l.subject}"`);
+  }
+}
+
 gmail.startPolling();
 
 app.listen(PORT, () => {

@@ -201,6 +201,18 @@ export function isBulkMail(msg, from) {
   return false;
 }
 
+// Google Calendar's own RSVP/update notifications — e.g. someone accepting a
+// meeting invite Aqualux sent. These come FROM the guest's real address (so
+// sender filtering alone can't catch them), always with a subject Google
+// itself prefixes, and this "guest replying to an invite" content is never a
+// service inquiry, so it should never become a lead.
+const CALENDAR_RSVP_SUBJECT = /^(accepted|declined|tentative|invitation|updated invitation|canceled event|cancelled event|new event):/i;
+const CALENDAR_RSVP_BODY = /has (accepted|declined|tentatively accepted) this invitation|join with google meet/i;
+
+export function isCalendarNotification(subject, bodyText) {
+  return CALENDAR_RSVP_SUBJECT.test((subject || '').trim()) || CALENDAR_RSVP_BODY.test(bodyText || '');
+}
+
 // ------------------------------------------------- website form emails ----
 /**
  * Wix (and similar form services) email you a "Submission summary" with
@@ -433,6 +445,10 @@ export async function syncNow() {
 
       // Bulk / promotional mail is not a lead.
       if (isBulkMail(first, from)) { markThreadProcessed(t.id); continue; }
+
+      // Google Calendar RSVP notifications ("Accepted: ...") are not leads,
+      // even though they arrive from the guest's real address.
+      if (isCalendarNotification(subject, bodyText)) { markThreadProcessed(t.id); continue; }
 
       const client = upsertClient({ name: from.name, email: from.email });
       const existing = latestLeadForClient(client.id);
