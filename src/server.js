@@ -317,10 +317,21 @@ app.post('/api/leads/:id/reply', async (req, res) => {
   }
   try {
     await gmail.sendReply(lead, client, (body || '').trim(), files);
+    // The draft became a real sent message — nothing left to keep.
+    db.prepare(`UPDATE leads SET draft_reply = '' WHERE id = ?`).run(lead.id);
     res.json(getLeadFull(lead.id));
   } catch (err) {
     res.status(502).json({ error: err.message });
   }
+});
+
+// Lightweight draft-reply autosave — doesn't touch updated_at, doesn't
+// trigger calendar sync, just persists whatever's currently typed so it
+// survives a closed tab, a reload, or switching devices.
+app.patch('/api/leads/:id/draft', (req, res) => {
+  const draft = String(req.body?.draft ?? '').slice(0, 20000);
+  db.prepare(`UPDATE leads SET draft_reply = ? WHERE id = ?`).run(draft, req.params.id);
+  res.json({ ok: true });
 });
 
 // ----------------------------------------------------------- signature ----

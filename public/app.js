@@ -835,13 +835,14 @@ async function openLead(id) {
       <h3>Conversation</h3>
       ${renderGmailThread(l)}
       <div class="reply-box" id="reply-box-anchor">
-        <textarea id="d-reply" placeholder="Write your reply — it sends from your Gmail…" ${canEmail ? '' : 'disabled'}></textarea>
+        <textarea id="d-reply" placeholder="Write your reply — it sends from your Gmail…" ${canEmail ? '' : 'disabled'}>${esc(l.draft_reply || '')}</textarea>
         <div id="d-file-list" class="file-list"></div>
         <div class="reply-actions">
           <button class="btn btn-primary" id="d-send" ${canEmail ? '' : 'disabled'}>Send reply ✉️</button>
           <button class="btn" id="d-attach" ${canEmail ? '' : 'disabled'} title="Attach files">📎 Attach</button>
           <button class="btn" id="d-footer" ${canEmail ? '' : 'disabled'} title="Insert your footer at the bottom of the message">Footer</button>
           <input type="file" id="d-files" multiple hidden>
+          <span class="send-status" id="d-draft-status"></span>
           <span class="send-status" id="d-send-status">${canEmail ? '' :
             'Connect Gmail in <a href="#" id="goto-settings">Settings</a> to send emails from here.'}</span>
         </div>
@@ -925,7 +926,29 @@ async function openLead(id) {
     replyBox.style.height = 'auto';
     replyBox.style.height = Math.min(replyBox.scrollHeight + 2, 420) + 'px';
   }
-  replyBox.addEventListener('input', autoGrow);
+  autoGrow(); // size correctly right away if a draft was restored
+
+  // --- draft autosave: survives closing the tab, reloading, or coming
+  // back on another device — saved to the server, not just this browser ---
+  const draftStatus = $('#d-draft-status');
+  let draftTimer, draftDirty = false;
+  async function saveDraftNow() {
+    clearTimeout(draftTimer);
+    if (!draftDirty) return;
+    draftDirty = false;
+    try {
+      await api(`/leads/${id}/draft`, { method: 'PATCH', body: JSON.stringify({ draft: replyBox.value }) });
+      draftStatus.textContent = replyBox.value.trim() ? 'Draft saved ✓' : '';
+      setTimeout(() => { if (draftStatus.textContent === 'Draft saved ✓') draftStatus.textContent = ''; }, 2000);
+    } catch { /* best effort — try again on the next edit */ }
+  }
+  replyBox.addEventListener('input', () => {
+    autoGrow();
+    draftDirty = true;
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(saveDraftNow, 800);
+  });
+  replyBox.addEventListener('blur', saveDraftNow);
 
   // --- footer button: insert the signature at the bottom of the message ---
   $('#d-footer')?.addEventListener('click', async () => {
@@ -943,6 +966,8 @@ async function openLead(id) {
     replyBox.value = replyBox.value.replace(/\s+$/, '') + '\n\n' + signature;
     autoGrow();
     replyBox.focus();
+    draftDirty = true;
+    saveDraftNow();
   });
 
   // --- attachments ---
