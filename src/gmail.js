@@ -583,6 +583,19 @@ function formatServiceDateLong(dateStr) {
   return `${d.toLocaleDateString('en-US', { month: 'long' })} ${ordinal(d.getDate())}`;
 }
 
+/**
+ * RFC 2047 "encoded word" for header values with non-ASCII characters (e.g.
+ * an em dash pulled from a Wix form name). Raw UTF-8 bytes dropped straight
+ * into a header are legal per RFC 822 but many mail clients still assume
+ * Latin-1/Windows-1252 for unmarked header bytes, which is exactly what
+ * turns a plain "—" into "Ã¢Â€Â"" in the inbox. Pure-ASCII values are
+ * returned untouched.
+ */
+function encodeHeaderValue(str) {
+  if (/^[\x00-\x7F]*$/.test(str)) return str;
+  return `=?UTF-8?B?${Buffer.from(str, 'utf8').toString('base64')}?=`;
+}
+
 /** "Private Chef - December 2nd", or just the activity name with no date yet. */
 function buildEmailSubject(lead) {
   const activity = lead.service || lead.subject || 'Aqualux booking';
@@ -604,7 +617,7 @@ export async function sendReply(lead, client, bodyText, attachments = []) {
   const headers = [
     `From: ${myEmail}`,
     `To: ${client.email}`,
-    `Subject: ${subject.replace(/[\r\n]/g, ' ')}`,
+    `Subject: ${encodeHeaderValue(subject.replace(/[\r\n]/g, ' '))}`,
     'MIME-Version: 1.0'
   ];
   // Only reference the previous email when replying inside a real Gmail
