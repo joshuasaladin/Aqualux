@@ -97,6 +97,11 @@ main { max-width: 1060px; margin: 0 auto; padding: 22px; }
 
 /* -------------------------------------------------------------- cards --- */
 .card-list { display: flex; flex-direction: column; gap: 10px; }
+.confirmed-section-title {
+  font-size: .8rem; text-transform: uppercase; letter-spacing: .6px;
+  color: var(--muted); margin: 10px 0 -2px;
+}
+.confirmed-section-title:first-child { margin-top: 0; }
 .card {
   background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
   padding: 14px 18px; cursor: pointer; transition: border-color .12s, box-shadow .12s;

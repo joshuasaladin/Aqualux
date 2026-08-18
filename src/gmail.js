@@ -310,10 +310,17 @@ export function parsePaymentNotification(from, subject, body) {
   const amount = Number((subject.match(/\$\s?([\d,]+(?:\.\d{1,2})?)/) ||
                          body.match(/\$\s?([\d,]+(?:\.\d{1,2})?)/) || [])[1]?.replace(/,/g, '')) || 0;
 
+  // Bank Zelle notifications ("You received money from John Doe", "John
+  // Doe sent you $50.00 with Zelle") rarely put the name at the very start
+  // of the subject/body the way Venmo does — the name usually sits mid-
+  // sentence after a greeting or preamble line, so these patterns search
+  // anywhere in the text instead of anchoring to a line start.
   let payer =
-    subject.match(/^(.{2,50}?)\s+(?:paid|sent)\s+you/i)?.[1] ||
-    body.match(/^(.{2,50}?)\s+(?:paid|sent)\s+you/im)?.[1] ||
-    text.match(/(?:from|received money from)\s+([A-Z][\w .'-]{2,40}?)(?:\s+(?:is|has|on|for|via|with)\b|[.,!\n]|$)/m)?.[1] ||
+    subject.match(/^(.{2,50}?)\s+(?:has\s+)?(?:paid|sent)\s+you/i)?.[1] ||
+    body.match(/^(.{2,50}?)\s+(?:has\s+)?(?:paid|sent)\s+you/im)?.[1] ||
+    text.match(/\b([A-Z][\w'.-]+(?:\s+[A-Z][\w'.-]+){0,3})\s+(?:has\s+)?(?:paid|sent)\s+you\b/)?.[1] ||
+    text.match(/\b([A-Z][\w'.-]+(?:\s+[A-Z][\w'.-]+){0,3})\s+sent\s+\$[\d,.]+\s+to\s+you\b/)?.[1] ||
+    text.match(/(?:from|received (?:money|a payment|\$[\d,.]+)\s+from)\s+([A-Z][\w .'-]{2,40}?)(?:\s+(?:is|has|on|for|via|with|using)\b|[.,!\n]|$)/m)?.[1] ||
     '';
   payer = payer.trim();
 

@@ -8,7 +8,8 @@ import { SERVICE_CATALOG } from './services-catalog.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 // generous body limit so email replies can carry file attachments
-app.use(express.json({ limit: '30mb' }));
+// (base64 inflates raw bytes by ~1/3, plus JSON structure overhead)
+app.use(express.json({ limit: '45mb' }));
 
 // ---------------------------------------------------------------- auth ----
 // Set ADMIN_PASSWORD to protect the CRM. The public intake endpoint and the
@@ -176,6 +177,7 @@ app.get('/api/leads/summary', (req, res) => {
       SUM(status IN ('new_lead','new_mail')) AS needs_reply,
       SUM(paid = 0 AND booking_confirmed = 1) AS confirmed_unpaid,
       SUM(booking_confirmed = 1 AND service_date >= date('now')) AS upcoming,
+      SUM(booking_confirmed = 1 AND status = 'new_mail') AS confirmed_new_mail,
       COUNT(*) AS total
     FROM leads`).get();
   res.json(s);
@@ -312,8 +314,10 @@ app.post('/api/leads/:id/reply', async (req, res) => {
       data: a.data
     });
   }
-  if (totalBytes > 20 * 1024 * 1024) {
-    return res.status(400).json({ error: 'Attachments too large — keep the total under 20 MB' });
+  // 25 MB is Gmail's own hard cap on total outgoing message size — this
+  // isn't a limit we chose, it's the most Gmail will accept either way.
+  if (totalBytes > 25 * 1024 * 1024) {
+    return res.status(400).json({ error: 'Attachments too large — keep the total under 25 MB (Gmail\'s own limit)' });
   }
   try {
     await gmail.sendReply(lead, client, (body || '').trim(), files);

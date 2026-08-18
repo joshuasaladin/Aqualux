@@ -327,6 +327,7 @@ async function loadLeads() {
     <div class="stat"><div class="num amber">${summary.confirmed_unpaid || 0}</div><div class="label">Confirmed but unpaid</div></div>
     <div class="stat"><div class="num">${summary.upcoming || 0}</div><div class="label">Upcoming bookings</div></div>
     <div class="stat"><div class="num">${summary.total || 0}</div><div class="label">Total leads</div></div>`;
+  updateConfirmedDot(summary);
   $('#lead-list').innerHTML = rows.length
     ? rows.map(leadCard).join('')
     : `<div class="empty">No leads yet. Connect Gmail in Settings — new emails will appear here automatically.</div>`;
@@ -358,10 +359,23 @@ $('#btn-sync').addEventListener('click', async () => {
 });
 
 /* ---------------------------------------------------------- confirmed --- */
+function updateConfirmedDot(summary) {
+  $('#confirmed-dot').classList.toggle('hidden', !summary.confirmed_new_mail);
+}
+
 async function loadConfirmed() {
   const rows = await api('/leads?tab=confirmed');
+  const today = new Date().toISOString().slice(0, 10);
+  // Undated bookings still need attention, so they stay with "upcoming"
+  // rather than getting lost at the bottom with true past bookings.
+  const future = rows.filter((l) => !l.service_date || l.service_date >= today)
+    .sort((a, b) => (a.service_date || '9999-99-99').localeCompare(b.service_date || '9999-99-99'));
+  const past = rows.filter((l) => l.service_date && l.service_date < today)
+    .sort((a, b) => b.service_date.localeCompare(a.service_date));
+  const section = (title, list) => list.length
+    ? `<h3 class="confirmed-section-title">${title}</h3>${list.map(leadCard).join('')}` : '';
   $('#confirmed-list').innerHTML = rows.length
-    ? rows.map(leadCard).join('')
+    ? section('Upcoming bookings', future) + section('Past bookings', past)
     : `<div class="empty">No confirmed bookings yet. Open a lead and switch on “Booking confirmed”.</div>`;
   bindLeadCards('#confirmed-list');
 }
@@ -972,7 +986,7 @@ async function openLead(id) {
 
   // --- attachments ---
   let pendingFiles = [];
-  const MAX_TOTAL = 20 * 1024 * 1024;
+  const MAX_TOTAL = 25 * 1024 * 1024; // Gmail's own hard cap on total outgoing message size
 
   function renderFileList() {
     $('#d-file-list').innerHTML = pendingFiles.map((f, i) => `
@@ -989,7 +1003,7 @@ async function openLead(id) {
     for (const file of e.target.files) {
       const total = pendingFiles.reduce((a, f) => a + f.size, 0) + file.size;
       if (total > MAX_TOTAL) {
-        alert(`"${file.name}" would push attachments over 20 MB — send it in a separate email.`);
+        alert(`"${file.name}" would push attachments over 25 MB — that's Gmail's own limit, so send it in a separate email.`);
         continue;
       }
       const data = await new Promise((resolve, reject) => {
@@ -1275,8 +1289,11 @@ async function boot() {
   updateGmailDot();
   showView('leads');
   // light auto-refresh so new emails appear without reloading
-  setInterval(() => {
-    if (currentView === 'leads' && $('#drawer').classList.contains('hidden')) loadLeads();
+  setInterval(async () => {
+    if (currentView === 'leads' && $('#drawer').classList.contains('hidden')) { loadLeads(); return; }
+    // keep the Confirmed nav dot fresh even while sitting on another tab
+    const summary = await api('/leads/summary').catch(() => null);
+    if (summary) updateConfirmedDot(summary);
   }, 60000);
 }
 
