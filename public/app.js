@@ -203,7 +203,12 @@ function bindGmailThreadEvents(l) {
 }
 
 const statusBadge = (s) => `<span class="badge st-${s}">${STATUS_LABELS[s] || s}</span>`;
-const payBadge = (paid) => `<span class="badge pay-${paid ? 'paid' : 'unpaid'}">${paid ? 'Paid' : 'Unpaid'}</span>`;
+// "Paid" is a manual switch, but the services list underneath knows what's
+// actually still owed — say "Part paid" rather than contradict the amount due
+// printed right next to it.
+const payBadge = (paid, owed = 0) => paid && owed > 0
+  ? `<span class="badge pay-part">Part paid</span>`
+  : `<span class="badge pay-${paid ? 'paid' : 'unpaid'}">${paid ? 'Paid' : 'Unpaid'}</span>`;
 const bookBadge = (b) => `<span class="badge bk-${b ? 'yes' : 'no'}">${b ? 'Confirmed ✓' : 'Not confirmed'}</span>`;
 
 /* ------------------------------------------------------------- login ---- */
@@ -297,7 +302,7 @@ function leadCard(l) {
   <div class="card ${done ? 'done' : ''}" data-lead="${l.id}">
     <div class="card-top">
       <span class="card-title">${esc(l.client_name)}</span>
-      ${statusBadge(l.status)} ${payBadge(l.paid)} ${bookBadge(l.booking_confirmed)}
+      ${statusBadge(l.status)} ${payBadge(l.paid, owed)} ${bookBadge(l.booking_confirmed)}
       ${l.merged_count > 1 ? `<span class="badge multi">📨 ${l.merged_count} submissions</span>` : ''}
       <span class="card-right">
         ${total ? `<span class="card-amount">${money(total)}${owed > 0 && owed < total ?
@@ -327,7 +332,8 @@ async function loadLeads() {
   ]);
   $('#stat-grid').innerHTML = `
     <div class="stat"><div class="num green">${summary.needs_reply || 0}</div><div class="label">Waiting on your reply</div></div>
-    <div class="stat"><div class="num amber">${summary.confirmed_unpaid || 0}</div><div class="label">Confirmed but unpaid</div></div>
+    <div class="stat"><div class="num amber">${summary.confirmed_unpaid || 0}</div><div class="label">Confirmed but unpaid${
+      summary.confirmed_owed > 0 ? ` · <b>${money(summary.confirmed_owed)}</b> still due` : ''}</div></div>
     <div class="stat"><div class="num">${summary.upcoming || 0}</div><div class="label">Upcoming bookings</div></div>
     <div class="stat"><div class="num">${summary.total || 0}</div><div class="label">Total leads</div></div>`;
   updateConfirmedDot(summary);
@@ -1218,7 +1224,7 @@ async function openClient(id) {
           <div class="card" data-lead="${l.id}">
             <div class="card-top">
               <span class="card-title">${esc(l.service || l.subject || '—')}</span>
-              ${statusBadge(l.status)} ${payBadge(l.paid)} ${bookBadge(l.booking_confirmed)}
+              ${statusBadge(l.status)} ${payBadge(l.paid, l.services_total ? l.services_owed : 0)} ${bookBadge(l.booking_confirmed)}
               <span class="card-right">${svcDateBadge(l.service_date, l.service_time)}</span>
             </div>
           </div>`).join('') : '<div class="empty">No leads yet.</div>'}

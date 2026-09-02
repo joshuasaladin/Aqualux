@@ -171,15 +171,27 @@ app.get('/api/leads', (req, res) => {
   res.json(rows);
 });
 
+// "Unpaid" means money is actually still owed: either the Paid switch is off,
+// or the booking's services list still shows an outstanding balance (a
+// deposit-only booking gets switched to Paid but is not paid in full).
 app.get('/api/leads/summary', (req, res) => {
   const s = db.prepare(`
     SELECT
-      SUM(status IN ('new_lead','new_mail')) AS needs_reply,
-      SUM(paid = 0 AND booking_confirmed = 1) AS confirmed_unpaid,
-      SUM(booking_confirmed = 1 AND service_date >= date('now')) AS upcoming,
-      SUM(booking_confirmed = 1 AND status = 'new_mail') AS confirmed_new_mail,
+      SUM(l.status IN ('new_lead','new_mail')) AS needs_reply,
+      SUM(l.booking_confirmed = 1 AND (l.paid = 0 OR COALESCE(s.owed, 0) > 0)) AS confirmed_unpaid,
+      SUM(CASE WHEN l.booking_confirmed = 0 THEN 0
+               WHEN s.lead_id IS NOT NULL THEN s.owed
+               WHEN l.paid = 0 THEN COALESCE(l.price, 0)
+               ELSE 0 END) AS confirmed_owed,
+      SUM(l.booking_confirmed = 1 AND l.service_date >= date('now')) AS upcoming,
+      SUM(l.booking_confirmed = 1 AND l.status = 'new_mail') AS confirmed_new_mail,
       COUNT(*) AS total
-    FROM leads`).get();
+    FROM leads l
+    LEFT JOIN (
+      SELECT lead_id,
+             SUM(downpayment * (1 - downpayment_paid) + balance * (1 - balance_paid)) AS owed
+      FROM lead_services GROUP BY lead_id
+    ) s ON s.lead_id = l.id`).get();
   res.json(s);
 });
 
@@ -539,7 +551,9 @@ app.get('/api/clients', (req, res) => {
 app.get('/api/clients/:id', (req, res) => {
   const client = db.prepare(`SELECT * FROM clients WHERE id = ?`).get(req.params.id);
   if (!client) return res.status(404).json({ error: 'Not found' });
-  client.leads = db.prepare(`SELECT l.* FROM leads l WHERE l.client_id = ? ${LEAD_ORDER}`).all(client.id);
+  // LEAD_SELECT (not SELECT l.*) so each lead carries what it still owes —
+  // the "Part paid" badge needs it.
+  client.leads = db.prepare(`${LEAD_SELECT} WHERE l.client_id = ? ${LEAD_ORDER}`).all(client.id);
   res.json(client);
 });
 
