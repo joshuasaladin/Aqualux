@@ -76,7 +76,7 @@
         <div>Sun</div><div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div>
       </div>
       <div class="cal-grid" id="cal-grid"></div>
-      <p class="cal-hint">Shows bookings that are marked <b>Confirmed</b> and have a service date. Click an event to open it and read the full details.</p>
+      <p class="cal-hint">Shows bookings that are marked <b>Confirmed</b> and have a service date. Tap a day to see that day on a timeline — and open any booking from there.</p>
     </section>
 
     <!-- ============================ PAYMENTS ============================= -->
@@ -219,6 +219,20 @@
     </form>
   </div>
 </div>
+<!-- Day timeline — opens when you tap a day in the calendar. -->
+<div id="day-backdrop" class="modal-backdrop hidden">
+  <div class="day-sheet">
+    <div class="day-head">
+      <button class="btn btn-sm" id="day-prev" title="Previous day">‹</button>
+      <h2 id="day-title"></h2>
+      <button class="btn btn-sm" id="day-next" title="Next day">›</button>
+      <button class="day-close" id="day-close" aria-label="Close">×</button>
+    </div>
+    <div id="day-allday" class="day-allday"></div>
+    <div id="day-timeline" class="day-timeline"></div>
+  </div>
+</div>
+
 <datalist id="category-list"></datalist>
 <datalist id="booking-method-list">
   <option>WhatsApp</option><option>Email</option><option>Phone</option>

@@ -236,6 +236,9 @@ function showView(name) {
   currentView = name;
   document.querySelectorAll('.view').forEach((v) => v.classList.add('hidden'));
   $('#view-' + name).classList.remove('hidden');
+  // The calendar gets the full window width; every other view keeps the
+  // narrower reading column.
+  document.querySelector('main').classList.toggle('wide', name === 'calendar');
   document.querySelectorAll('.nav-btn').forEach((b) =>
     b.classList.toggle('active', b.dataset.view === name));
   const inOtherMenu = name === 'clients' || name === 'services';
@@ -382,6 +385,13 @@ async function loadConfirmed() {
 
 /* ------------------------------------------------------------ calendar --- */
 let calYear, calMonth; // calMonth: 0-11
+// Matches DEFAULT_EVENT_MINUTES in src/gmail.js — how long a booking is
+// assumed to run when it only has a start time.
+const EVENT_MINUTES = 120;
+const phoneQuery = window.matchMedia('(max-width: 780px)');
+
+const pad2 = (n) => String(n).padStart(2, '0');
+const ymd = (date) => `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
 
 async function renderCalendar() {
   if (calYear === undefined) {
@@ -390,28 +400,48 @@ async function renderCalendar() {
   }
   const first = new Date(calYear, calMonth, 1);
   const last = new Date(calYear, calMonth + 1, 0);
-  const pad = (n) => String(n).padStart(2, '0');
-  const from = `${calYear}-${pad(calMonth + 1)}-01`;
-  const to = `${calYear}-${pad(calMonth + 1)}-${pad(last.getDate())}`;
+  const from = `${calYear}-${pad2(calMonth + 1)}-01`;
+  const to = `${calYear}-${pad2(calMonth + 1)}-${pad2(last.getDate())}`;
   const events = await api(`/calendar?from=${from}&to=${to}`);
   const byDay = {};
   for (const e of events) (byDay[e.service_date] ||= []).push(e);
 
   $('#cal-title').textContent = first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = ymd(new Date());
+  // A phone day column only has room for a couple of chips — the rest are
+  // reachable by tapping the day, so show a "+N" instead of clipping silently.
+  const maxChips = phoneQuery.matches ? 2 : 4;
   let cells = '';
   for (let i = 0; i < first.getDay(); i++) cells += `<div class="cal-cell other"></div>`;
   for (let d = 1; d <= last.getDate(); d++) {
-    const dateStr = `${calYear}-${pad(calMonth + 1)}-${pad(d)}`;
-    const evts = (byDay[dateStr] || []).map((e) => `
+    const dateStr = `${calYear}-${pad2(calMonth + 1)}-${pad2(d)}`;
+    const list = byDay[dateStr] || [];
+    // Phones hide the time and the client name (CSS) and lead with the
+    // service, which is what tells two bookings apart at a glance in a
+    // column only a few characters wide.
+    let evts = list.slice(0, maxChips).map((e) => `
       <div class="cal-evt ${e.paid ? '' : 'unpaid'}" data-lead="${e.id}"
            title="${e.service_time ? fmtTime(e.service_time) + ' — ' : ''}${esc(e.client_name)} — ${esc(e.service)}${e.paid ? '' : ' (unpaid)'}">
-        ${e.service_time ? `<b>${fmtTime(e.service_time)}</b> ` : ''}${esc(e.client_name.split(' ')[0])}: ${esc(e.service)}
+        ${e.service_time ? `<b class="evt-time">${fmtTime(e.service_time)}</b> ` : ''}<span
+          class="evt-who">${esc(e.client_name.split(' ')[0])}: </span>${esc(e.service)}
       </div>`).join('');
-    cells += `<div class="cal-cell ${dateStr === todayStr ? 'today' : ''}"><div class="d">${d}</div>${evts}</div>`;
+    if (list.length > maxChips) evts += `<div class="cal-more">+${list.length - maxChips} more</div>`;
+    cells += `<div class="cal-cell ${dateStr === todayStr ? 'today' : ''}" data-day="${dateStr}">
+      <div class="d">${d}</div>${evts}</div>`;
   }
   $('#cal-grid').innerHTML = cells;
-  bindLeadCards('#cal-grid');
+  // On a desktop a chip is a big enough target to open the booking directly.
+  // On a phone the chips are a few millimetres tall and the text is clipped,
+  // so a tap anywhere in the day — chip included — opens the day timeline,
+  // and the booking is opened from there. Same as Google's month view.
+  $('#cal-grid').querySelectorAll('[data-lead]').forEach((el) =>
+    el.addEventListener('click', (e) => {
+      if (phoneQuery.matches) return; // bubbles up to the day cell below
+      e.stopPropagation();
+      openLead(el.dataset.lead);
+    }));
+  $('#cal-grid').querySelectorAll('[data-day]').forEach((el) =>
+    el.addEventListener('click', () => openDayView(el.dataset.day)));
 }
 
 $('#cal-prev').addEventListener('click', () => {
@@ -421,6 +451,115 @@ $('#cal-prev').addEventListener('click', () => {
 $('#cal-next').addEventListener('click', () => {
   calMonth++; if (calMonth > 11) { calMonth = 0; calYear++; }
   renderCalendar();
+});
+// Rotating the phone changes how many chips fit — redraw so "+N" stays honest.
+phoneQuery.addEventListener('change', () => { if (currentView === 'calendar') renderCalendar(); });
+
+/* ------------------------------------------------------- day timeline --- */
+const HOUR_PX = 58;
+let dayViewDate = null;
+
+const hourLabel = (h) =>
+  new Date(2000, 0, 1, h).toLocaleTimeString(undefined, { hour: 'numeric' });
+const minsOf = (t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+
+async function openDayView(dateStr) {
+  dayViewDate = dateStr;
+  const rows = await api(`/calendar?from=${dateStr}&to=${dateStr}`);
+  const d = new Date(dateStr + 'T12:00:00');
+  $('#day-title').textContent =
+    d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+  renderDayTimeline(rows);
+  $('#day-backdrop').classList.remove('hidden');
+}
+
+function dayEventHtml(e, extra = '', style = '') {
+  return `<div class="day-evt ${e.paid ? '' : 'unpaid'} ${extra}" data-lead="${e.id}" style="${style}">
+    ${e.service_time ? `<b>${fmtTime(e.service_time)}</b> ` : ''}${esc(e.service || 'Booking')}
+    <span class="day-evt-who">${esc(e.client_name)}</span>
+  </div>`;
+}
+
+function renderDayTimeline(rows) {
+  const timed = rows.filter((r) => r.service_time);
+  const allDay = rows.filter((r) => !r.service_time);
+
+  $('#day-allday').innerHTML = allDay.length
+    ? `<div class="day-allday-label">No set time</div>${allDay.map((e) => dayEventHtml(e)).join('')}`
+    : '';
+
+  // Nothing with a start time — an empty 12-hour grid would just be noise.
+  if (!timed.length) {
+    $('#day-timeline').innerHTML = `<div class="day-empty">${rows.length
+      ? 'No bookings with a set time this day.'
+      : 'Nothing booked this day.'}</div>`;
+    $('#day-backdrop').querySelectorAll('[data-lead]').forEach((el) =>
+      el.addEventListener('click', () => { closeDayView(); openLead(el.dataset.lead); }));
+    return;
+  }
+
+  // Show an hour before the first booking and an hour after the last, so the
+  // day opens on the part that actually has something in it.
+  const starts = timed.map((r) => Math.floor(minsOf(r.service_time) / 60));
+  const ends = timed.map((r) => Math.ceil((minsOf(r.service_time) + EVENT_MINUTES) / 60));
+  const startH = Math.max(0, Math.min(...starts) - 1);
+  const endH = Math.min(24, Math.max(...ends) + 1);
+
+  // Side-by-side columns for bookings that overlap in time, like Google's.
+  const items = timed
+    .map((r) => ({ r, start: minsOf(r.service_time), end: minsOf(r.service_time) + EVENT_MINUTES }))
+    .sort((a, b) => a.start - b.start);
+  const clusters = [];
+  for (const item of items) {
+    const open = clusters[clusters.length - 1];
+    if (open && item.start < Math.max(...open.map((x) => x.end))) open.push(item);
+    else clusters.push([item]);
+  }
+  for (const cluster of clusters) {
+    const colEnds = [];
+    for (const item of cluster) {
+      let col = colEnds.findIndex((endsAt) => endsAt <= item.start);
+      if (col === -1) { colEnds.push(item.end); col = colEnds.length - 1; }
+      else colEnds[col] = item.end;
+      item.col = col;
+    }
+    for (const item of cluster) item.cols = colEnds.length;
+  }
+
+  const blocks = items.map((item) => {
+    const top = (item.start - startH * 60) / 60 * HOUR_PX;
+    const height = Math.max(30, (item.end - item.start) / 60 * HOUR_PX - 3);
+    const w = 100 / item.cols;
+    return dayEventHtml(item.r, 'placed',
+      `top:${top}px; height:${height}px; left:${item.col * w}%; width:calc(${w}% - 4px)`);
+  }).join('');
+
+  let hours = '';
+  for (let h = startH; h < endH; h++) {
+    hours += `<div class="day-hour" style="height:${HOUR_PX}px">${hourLabel(h)}</div>`;
+  }
+  const bodyHeight = (endH - startH) * HOUR_PX;
+  $('#day-timeline').innerHTML = `
+    <div class="day-hours">${hours}</div>
+    <div class="day-events" style="height:${bodyHeight}px; background-size: 100% ${HOUR_PX}px">
+      ${blocks || '<div class="day-empty">Nothing booked at a set time.</div>'}
+    </div>`;
+
+  $('#day-backdrop').querySelectorAll('[data-lead]').forEach((el) =>
+    el.addEventListener('click', () => { closeDayView(); openLead(el.dataset.lead); }));
+}
+
+function closeDayView() { $('#day-backdrop').classList.add('hidden'); }
+function shiftDay(days) {
+  const d = new Date(dayViewDate + 'T12:00:00');
+  d.setDate(d.getDate() + days);
+  openDayView(ymd(d));
+}
+$('#day-close').addEventListener('click', closeDayView);
+$('#day-prev').addEventListener('click', () => shiftDay(-1));
+$('#day-next').addEventListener('click', () => shiftDay(1));
+$('#day-backdrop').addEventListener('click', (e) => {
+  if (e.target === $('#day-backdrop')) closeDayView();
 });
 
 /* ----------------------------------------------------------- payments --- */

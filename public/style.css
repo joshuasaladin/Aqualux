@@ -343,10 +343,12 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--aqua); outl
 }
 
 /* ------------------------------------------------------------ calendar --- */
-/* Calendar reads better bigger than the rest of the app, so it breaks out
-   of main's normal 1060px column on screens wide enough to spare it. */
-#view-calendar { max-width: 1500px; margin: 0 auto; }
-.cal-header { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
+/* The calendar reads better big, so main drops its usual reading-width cap
+   while the calendar tab is open (class toggled in showView). */
+main.wide { max-width: 1750px; }
+/* Capped so the month arrows stay beside the title instead of drifting to
+   the far corners once the grid goes full width. */
+.cal-header { display: flex; align-items: center; gap: 14px; margin: 0 auto 12px; max-width: 520px; }
 .cal-header h2 { margin: 0; flex: 1; text-align: center; font-size: 1.4rem; }
 /* minmax(0,1fr) + min-width:0 keep all 7 columns EQUAL — long event names
    get cut off with … instead of stretching the day; click the event to
@@ -368,7 +370,50 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--aqua); outl
   white-space: nowrap; font-weight: 600;
 }
 .cal-evt.unpaid { background: var(--amber); }
+.cal-more { color: var(--muted); font-size: .75rem; font-weight: 650; padding-left: 3px; }
 .cal-hint { color: var(--muted); font-size: .82rem; margin-top: 12px; }
+
+/* --------------------------------------------------------- day timeline --- */
+.day-sheet {
+  background: #fff; border-radius: 14px; width: min(620px, 100%);
+  max-height: 88vh; display: flex; flex-direction: column; overflow: hidden;
+}
+.day-head {
+  display: flex; align-items: center; gap: 8px; padding: 14px 52px 14px 14px;
+  border-bottom: 1px solid var(--border); position: relative;
+}
+.day-head h2 { margin: 0; flex: 1; text-align: center; font-size: 1.05rem; }
+.day-close {
+  position: absolute; top: 8px; right: 10px; background: none; border: none;
+  font-size: 1.6rem; line-height: 1; color: var(--muted); cursor: pointer; padding: 2px 8px;
+}
+.day-allday { padding: 10px 14px 0; }
+.day-allday-label {
+  color: var(--muted); font-size: .72rem; text-transform: uppercase;
+  letter-spacing: .6px; font-weight: 650; margin-bottom: 6px;
+}
+.day-timeline { display: flex; overflow-y: auto; padding: 12px 14px 18px; gap: 8px; }
+.day-hours { flex: 0 0 58px; }
+.day-hour {
+  color: var(--muted); font-size: .75rem; text-align: right;
+  padding-right: 6px; box-sizing: border-box;
+}
+/* One gridline per hour — spacing comes from an inline background-size that
+   matches the pixels-per-hour the events are positioned with. */
+.day-events {
+  position: relative; flex: 1; min-width: 0;
+  background-image: linear-gradient(to bottom, var(--border) 1px, transparent 1px);
+  background-repeat: repeat-y;
+}
+.day-evt {
+  background: var(--aqua); color: #fff; border-radius: 8px; padding: 5px 8px;
+  font-size: .82rem; font-weight: 600; cursor: pointer; overflow: hidden;
+  margin-bottom: 6px;
+}
+.day-evt.placed { position: absolute; margin-bottom: 0; }
+.day-evt.unpaid { background: var(--amber); }
+.day-evt-who { display: block; font-weight: 500; opacity: .9; }
+.day-empty { color: var(--muted); font-size: .85rem; padding: 8px 2px; }
 
 /* ------------------------------------------------------------ settings --- */
 .setting-row { margin-bottom: 12px; }
@@ -462,10 +507,26 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--aqua); outl
   .opt-row-line2, .opt-row-line3 { grid-template-columns: 1fr 1fr; }
   .svc-card-actions { flex-wrap: wrap; }
 
-  /* calendar: shrink further so a week still fits without horizontal scroll */
-  .cal-cell { height: 58px; padding: 4px; font-size: .7rem; }
-  .cal-evt { padding: 2px 4px; font-size: .68rem; }
-  .cal-header h2 { font-size: .95rem; }
+  /* Calendar on a phone, Google-style: the grid goes edge to edge with
+     hairline gaps so each day column is wide enough to actually read a few
+     words of the booking. The start time is dropped from the chip (it would
+     eat the whole column) — tap the day to see everything on a timeline. */
+  .cal-grid { gap: 1px; margin-left: -14px; margin-right: -14px; }
+  .cal-cell { height: 76px; padding: 3px; font-size: .72rem; border-radius: 0; }
+  .cal-cell .d { margin-bottom: 2px; font-size: .72rem; }
+  .cal-evt {
+    padding: 1px 3px; font-size: .66rem; border-radius: 3px; margin-bottom: 2px;
+    text-overflow: clip;
+  }
+  .cal-evt .evt-time, .cal-evt .evt-who { display: none; }
+  .cal-more { font-size: .64rem; padding-left: 2px; }
+  .cal-header h2 { font-size: 1.05rem; }
+  .cal-dow { font-size: .7rem; }
+
+  .modal-backdrop { padding: 10px; }
+  .day-sheet { max-height: 92vh; }
+  .day-hours { flex-basis: 46px; }
+  .day-hour { font-size: .68rem; }
 
   .stat-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
   .stat { padding: 12px 14px; }
