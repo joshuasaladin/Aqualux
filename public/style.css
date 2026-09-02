@@ -343,16 +343,19 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--aqua); outl
 }
 
 /* ------------------------------------------------------------ calendar --- */
+/* Calendar reads better bigger than the rest of the app, so it breaks out
+   of main's normal 1060px column on screens wide enough to spare it. */
+#view-calendar { max-width: 1500px; margin: 0 auto; }
 .cal-header { display: flex; align-items: center; gap: 14px; margin-bottom: 10px; }
-.cal-header h2 { margin: 0; flex: 1; text-align: center; }
+.cal-header h2 { margin: 0; flex: 1; text-align: center; font-size: 1.4rem; }
 /* minmax(0,1fr) + min-width:0 keep all 7 columns EQUAL — long event names
    get cut off with … instead of stretching the day; click the event to
    open the lead and read everything. */
-.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
-.cal-dow { margin-bottom: 6px; text-align: center; font-size: .75rem; color: var(--muted); font-weight: 650; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; }
+.cal-dow { margin-bottom: 6px; text-align: center; font-size: .85rem; color: var(--muted); font-weight: 650; }
 .cal-cell {
   background: var(--card); border: 1px solid var(--border); border-radius: 8px;
-  height: 96px; padding: 6px; font-size: .78rem;
+  height: 140px; padding: 8px; font-size: .88rem;
   min-width: 0; overflow: hidden;
 }
 .cal-cell.other { background: transparent; border-color: transparent; }
@@ -360,7 +363,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--aqua); outl
 .cal-cell.today { border-color: var(--aqua); }
 .cal-cell.today .d { color: var(--aqua-dark); }
 .cal-evt {
-  background: var(--aqua); color: #fff; border-radius: 6px; padding: 3px 6px;
+  background: var(--aqua); color: #fff; border-radius: 6px; padding: 4px 7px;
   margin-bottom: 3px; cursor: pointer; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; font-weight: 600;
 }

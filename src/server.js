@@ -272,7 +272,10 @@ app.patch('/api/leads/:id', async (req, res) => {
   touchLead(id);
 
   let calendar_sync_error = null;
-  if (booking_confirmed !== undefined || service_date !== undefined || service_time !== undefined) {
+  // The service name drives the event title AND whether the massage provider
+  // is invited, so a service change has to re-sync too.
+  if (booking_confirmed !== undefined || service_date !== undefined ||
+      service_time !== undefined || service !== undefined) {
     calendar_sync_error = await syncLeadToCalendar(id);
   }
   res.json({ ...getLeadFull(id), calendar_sync_error });

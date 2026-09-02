@@ -15,6 +15,8 @@ const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const CAL_API = 'https://www.googleapis.com/calendar/v3';
 // Google Calendar's "Banana" color — the closest built-in option to yellow.
 const CAL_COLOR_ID = '5';
+// Massage provider — auto-invited to every massage booking's calendar event.
+const MASSAGE_PROVIDER_EMAIL = 'mylovelybodyaruba@gmail.com';
 
 // Bulk/marketing sender addresses — never real people.
 const SKIP_SENDERS = /no[-._]?reply|donotreply|mailer-daemon|notifications?@|newsletter|marketing@|promo(?:tions?)?@|offers?@|deals@|@e?mail\.|@e\./i;
@@ -768,10 +770,27 @@ function calendarEventBody(lead) {
   const summary = `${lead.service || 'Booking'} — ${lead.client_name}`;
   const description = lines.join('\n');
 
+  // Massage bookings invite the massage provider as a calendar guest with a
+  // Meet link, so she gets the booking and can accept it from her own
+  // calendar. The empty list on everything else clears her off an event
+  // whose service was later changed to something she isn't part of.
+  // requestId stays the same per lead so re-syncing keeps ONE Meet link.
+  const guest = /massage/i.test(lead.service || '')
+    ? {
+        attendees: [{ email: MASSAGE_PROVIDER_EMAIL }],
+        conferenceData: {
+          createRequest: {
+            requestId: `aqualux-massage-${lead.id}`,
+            conferenceSolutionKey: { type: 'hangoutsMeet' }
+          }
+        }
+      }
+    : { attendees: [] };
+
   if (lead.service_time) {
     const endPoint = addMinutesToTime(lead.service_date, lead.service_time, DEFAULT_EVENT_MINUTES);
     return {
-      summary, description, colorId: CAL_COLOR_ID,
+      summary, description, colorId: CAL_COLOR_ID, ...guest,
       start: { dateTime: `${lead.service_date}T${lead.service_time}:00${ARUBA_UTC_OFFSET}`, timeZone: ARUBA_TZ },
       end: { dateTime: `${endPoint.date}T${endPoint.time}:00${ARUBA_UTC_OFFSET}`, timeZone: ARUBA_TZ }
     };
@@ -781,7 +800,7 @@ function calendarEventBody(lead) {
   const end = new Date(lead.service_date + 'T00:00:00');
   end.setDate(end.getDate() + 1);
   return {
-    summary, description, colorId: CAL_COLOR_ID,
+    summary, description, colorId: CAL_COLOR_ID, ...guest,
     start: { date: lead.service_date },
     end: { date: end.toISOString().slice(0, 10) }
   };
@@ -791,9 +810,12 @@ function calendarEventBody(lead) {
 export async function upsertCalendarEvent(lead) {
   if (!hasCalendarScope()) throw new Error('Google Calendar isn\'t connected — reconnect Gmail in Settings to grant calendar access');
   const body = calendarEventBody(lead);
+  // Google only acts on conferenceData when conferenceDataVersion=1 is asked
+  // for, and only emails the guest when sendUpdates says so.
+  const qs = body.conferenceData ? '?conferenceDataVersion=1&sendUpdates=all' : '';
   if (lead.gcal_event_id) {
     try {
-      const updated = await calApiRequest(`/calendars/primary/events/${lead.gcal_event_id}`, {
+      const updated = await calApiRequest(`/calendars/primary/events/${lead.gcal_event_id}${qs}`, {
         method: 'PATCH', body: JSON.stringify(body)
       });
       return updated.id;
@@ -802,7 +824,7 @@ export async function upsertCalendarEvent(lead) {
       if (!/not found|404/i.test(err.message)) throw err;
     }
   }
-  const created = await calApiRequest('/calendars/primary/events', { method: 'POST', body: JSON.stringify(body) });
+  const created = await calApiRequest(`/calendars/primary/events${qs}`, { method: 'POST', body: JSON.stringify(body) });
   return created.id;
 }
 
