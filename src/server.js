@@ -1,7 +1,8 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { db, touchLead, upsertClient, setSetting, getSetting, markThreadProcessed, LEAD_ORDER } from './db.js';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { db, dataDir, touchLead, upsertClient, setSetting, getSetting, markThreadProcessed, LEAD_ORDER } from './db.js';
 import * as gmail from './gmail.js';
 import { SERVICE_CATALOG } from './services-catalog.js';
 
@@ -199,8 +200,13 @@ function getLeadFull(id) {
   const lead = db.prepare(`${LEAD_SELECT} WHERE l.id = ?`).get(id);
   if (!lead) return null;
   lead.messages = db.prepare(`
-    SELECT id, direction, from_email, subject, body, sent_at
+    SELECT id, direction, from_email, from_name, to_emails, cc, subject, body, sent_at
     FROM messages WHERE lead_id = ? ORDER BY sent_at ASC, id ASC`).all(id);
+  const atts = db.prepare(`
+    SELECT a.id, a.message_id, a.filename, a.mime_type, a.size, a.is_inline
+    FROM message_attachments a JOIN messages m ON m.id = a.message_id
+    WHERE m.lead_id = ? ORDER BY a.id`).all(id);
+  for (const m of lead.messages) m.attachments = atts.filter((a) => a.message_id === m.id);
   lead.services = db.prepare(`
     SELECT * FROM lead_services WHERE lead_id = ? ORDER BY id ASC`).all(id);
   return lead;
@@ -307,15 +313,52 @@ app.delete('/api/leads/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
+// --------------------------------------------------------- attachments ----
+// Bytes come from Gmail the first time a file is opened, then from a disk
+// cache next to the database so the second look is instant.
+const attachDir = path.join(dataDir, 'attachments');
+mkdirSync(attachDir, { recursive: true });
+
+app.get('/api/attachments/:id', async (req, res) => {
+  const att = db.prepare(`SELECT * FROM message_attachments WHERE id = ?`).get(req.params.id);
+  if (!att) return res.status(404).json({ error: 'Not found' });
+  const cached = path.join(attachDir, String(att.id));
+  try {
+    let bytes;
+    if (existsSync(cached)) bytes = readFileSync(cached);
+    else {
+      bytes = await gmail.fetchAttachmentBytes(att);
+      writeFileSync(cached, bytes);
+    }
+    const safeName = att.filename.replace(/[^\w.\- ()]/g, '_') || 'attachment';
+    res.set({
+      'Content-Type': att.mime_type || 'application/octet-stream',
+      'Content-Disposition': `attachment; filename="${safeName}"`,
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'private, max-age=86400'
+    });
+    res.send(bytes);
+  } catch (err) {
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // --------------------------------------------------------------- reply ----
 app.post('/api/leads/:id/reply', async (req, res) => {
-  const { body, attachments = [] } = req.body || {};
+  const { body, attachments = [], cc = '' } = req.body || {};
   if (!body?.trim() && !attachments.length) {
     return res.status(400).json({ error: 'Message body is required' });
   }
   const lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(req.params.id);
   if (!lead) return res.status(404).json({ error: 'Not found' });
   const client = db.prepare(`SELECT * FROM clients WHERE id = ?`).get(lead.client_id);
+  const ccList = gmail.parseCcList(cc);
+  if (ccList.invalid.length) {
+    return res.status(400).json({ error: `Not a valid email address in Cc: ${ccList.invalid.join(', ')}` });
+  }
+  // the client is already in To, and copying yourself is pointless
+  const me = (getSetting('gmail_email') || '').toLowerCase();
+  ccList.valid = ccList.valid.filter((e) => e !== client.email.toLowerCase() && e !== me);
 
   const files = [];
   let totalBytes = 0;
@@ -335,9 +378,11 @@ app.post('/api/leads/:id/reply', async (req, res) => {
     return res.status(400).json({ error: 'Attachments too large — keep the total under 25 MB (Gmail\'s own limit)' });
   }
   try {
-    await gmail.sendReply(lead, client, (body || '').trim(), files);
-    // The draft became a real sent message — nothing left to keep.
-    db.prepare(`UPDATE leads SET draft_reply = '' WHERE id = ?`).run(lead.id);
+    await gmail.sendReply(lead, client, (body || '').trim(), files, ccList.valid);
+    // The draft became a real sent message — nothing left to keep. The Cc
+    // list is kept: the same people usually stay copied on the next reply.
+    db.prepare(`UPDATE leads SET draft_reply = '', reply_cc = ? WHERE id = ?`)
+      .run(ccList.valid.join(', '), lead.id);
     res.json(getLeadFull(lead.id));
   } catch (err) {
     res.status(502).json({ error: err.message });
@@ -348,8 +393,13 @@ app.post('/api/leads/:id/reply', async (req, res) => {
 // trigger calendar sync, just persists whatever's currently typed so it
 // survives a closed tab, a reload, or switching devices.
 app.patch('/api/leads/:id/draft', (req, res) => {
-  const draft = String(req.body?.draft ?? '').slice(0, 20000);
-  db.prepare(`UPDATE leads SET draft_reply = ? WHERE id = ?`).run(draft, req.params.id);
+  if (req.body?.draft !== undefined) {
+    const draft = String(req.body.draft).slice(0, 20000);
+    db.prepare(`UPDATE leads SET draft_reply = ? WHERE id = ?`).run(draft, req.params.id);
+  }
+  if (req.body?.cc !== undefined) {
+    db.prepare(`UPDATE leads SET reply_cc = ? WHERE id = ?`).run(String(req.body.cc).slice(0, 1000), req.params.id);
+  }
   res.json({ ok: true });
 });
 

@@ -116,19 +116,99 @@ function msgSnippet(text) {
   return oneLine.length > 100 ? oneLine.slice(0, 100) + '…' : oneLine;
 }
 
+/* --- email attachments: photos shown in the message, other files as chips --- */
+// Photos browsers can draw. iPhone HEIC photos are left as a download, since
+// most browsers other than Safari can't display them.
+const VIEWABLE_IMAGE = /^image\/(png|jpe?g|gif|webp|bmp)$/i;
+function visibleAttachments(m) {
+  // Small images pasted into the body are signature logos, social icons and
+  // tracking pixels — the photos people actually send are far bigger.
+  return (m.attachments || []).filter((a) =>
+    !(a.is_inline && /^image\//i.test(a.mime_type) && a.size < 10 * 1024));
+}
+const fmtSize = (b) => b < 1024 * 1000 ? Math.max(1, Math.round(b / 1024)) + ' KB' : (b / 1048576).toFixed(1) + ' MB';
+
+// The attachment endpoint needs the login token, which an <img src> can't
+// send — so files are fetched with it and shown from a local blob URL.
+const attBlobCache = new Map();
+async function attachmentUrl(id) {
+  if (!attBlobCache.has(id)) {
+    attBlobCache.set(id, (async () => {
+      const res = await fetch('/api/attachments/' + id, { headers: token ? { Authorization: 'Bearer ' + token } : {} });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not load this file');
+      return URL.createObjectURL(await res.blob());
+    })());
+  }
+  try { return await attBlobCache.get(id); } catch (err) { attBlobCache.delete(id); throw err; }
+}
+async function downloadAttachment(id, name) {
+  try {
+    const a = document.createElement('a');
+    a.href = await attachmentUrl(id);
+    a.download = name || 'attachment';
+    document.body.appendChild(a); a.click(); a.remove();
+  } catch (err) { alert(err.message); }
+}
+function openLightbox(id, name) {
+  $('#lightbox-name').textContent = name;
+  $('#lightbox-img').src = '';
+  $('#lightbox').classList.remove('hidden');
+  $('#lightbox-download').onclick = () => downloadAttachment(id, name);
+  attachmentUrl(id).then((url) => { $('#lightbox-img').src = url; }).catch((err) => alert(err.message));
+}
+$('#lightbox-close').addEventListener('click', () => $('#lightbox').classList.add('hidden'));
+$('#lightbox').addEventListener('click', (e) => { if (e.target.id === 'lightbox') $('#lightbox').classList.add('hidden'); });
+
+function renderAttachments(files) {
+  if (!files.length) return '';
+  const images = files.filter((a) => VIEWABLE_IMAGE.test(a.mime_type));
+  const others = files.filter((a) => !VIEWABLE_IMAGE.test(a.mime_type));
+  return `
+    ${images.length ? `<div class="msg-images">${images.map((a) => `
+      <button class="msg-img" data-att-view="${a.id}" data-name="${esc(a.filename)}" title="${esc(a.filename)}">
+        <img data-att-src="${a.id}" alt="${esc(a.filename)}"></button>`).join('')}</div>` : ''}
+    ${others.length ? `<div class="msg-files">${others.map((a) => `
+      <button class="gmail-attach-chip att-dl" data-att-dl="${a.id}" data-name="${esc(a.filename)}">
+        📎 ${esc(a.filename)} <small>${fmtSize(a.size)}</small></button>`).join('')}</div>` : ''}`;
+}
+
+function loadThreadImages(root = document) {
+  root.querySelectorAll('img[data-att-src]:not([src])').forEach((img) => {
+    attachmentUrl(img.dataset.attSrc)
+      .then((url) => { img.src = url; })
+      .catch(() => { img.closest('.msg-img')?.classList.add('failed'); });
+  });
+}
+
+/** Who a message is really from — on a thread with several people it isn't always the client. */
+function senderLabel(m, l) {
+  if (m.direction === 'out') return 'You';
+  if (m.from_email && l.client_email && m.from_email !== l.client_email.toLowerCase()) {
+    return m.from_name || m.from_email;
+  }
+  return l.client_name;
+}
+
 function renderThreadRow(m, l, isOpen) {
   const isFormSubmission = m.body.startsWith('Website form submission');
-  const { text: withoutAttach, attachments } = extractAttachments(m.body);
+  const { text: withoutAttach, attachments: sentNames } = extractAttachments(m.body);
   const { text, hasQuoted } = isFormSubmission
     ? { text: withoutAttach, hasQuoted: false } : stripQuoted(withoutAttach);
+  const files = visibleAttachments(m);
 
-  const senderName = isFormSubmission ? 'Website form' : (m.direction === 'in' ? l.client_name : 'You');
+  const senderName = isFormSubmission ? 'Website form' : senderLabel(m, l);
   const initial = senderName.trim()[0]?.toUpperCase() || '?';
   const avatarStyle = m.direction === 'out'
     ? `background: var(--aqua-dark)`
-    : `background: hsl(${hueForName(l.client_name)}, 55%, 42%)`;
-  const attachChip = attachments.length
-    ? `<span class="gmail-attach-chip">📎 ${attachments.map(esc).join(', ')}</span>` : '';
+    : `background: hsl(${hueForName(senderName)}, 55%, 42%)`;
+  // Files sent from the CRM are listed by name until the next Gmail sync
+  // brings in the real (openable) attachments.
+  const attachChip = !files.length && sentNames.length
+    ? `<span class="gmail-attach-chip">📎 ${sentNames.map(esc).join(', ')}</span>` : '';
+  const hasFiles = files.length || sentNames.length;
+  const hasPhotos = files.some((a) => /^image\//i.test(a.mime_type));
+  const recips = m.cc
+    ? `<div class="gmail-recips">to ${esc(m.to_emails || l.client_email)} · <b>cc</b> ${esc(m.cc)}</div>` : '';
 
   if (!isOpen) {
     return `
@@ -136,7 +216,7 @@ function renderThreadRow(m, l, isOpen) {
       <div class="gmail-avatar" style="${avatarStyle}">${esc(initial)}</div>
       <div class="gmail-row-main">
         <span class="gmail-sender">${esc(senderName)}</span>
-        <span class="gmail-snippet">${esc(msgSnippet(text))}${attachments.length ? ' 📎' : ''}</span>
+        <span class="gmail-snippet">${esc(msgSnippet(text) || (hasPhotos ? 'Photo' : ''))}${hasPhotos ? ' 🖼️' : hasFiles ? ' 📎' : ''}</span>
         <span class="gmail-date">${timeAgo(m.sent_at)}</span>
       </div>
     </div>`;
@@ -149,7 +229,9 @@ function renderThreadRow(m, l, isOpen) {
           <span class="gmail-sender">${esc(senderName)}</span>
           <span class="gmail-date">${fmtDateTime(m.sent_at)}</span>
         </div>
-        <div class="gmail-body">${esc(text)}</div>
+        ${recips}
+        ${text ? `<div class="gmail-body">${esc(text)}</div>` : ''}
+        ${renderAttachments(files)}
         ${attachChip}
         ${hasQuoted ? `<div class="quoted-toggle" data-mid="${m.id}">Show quoted history ⌄</div>` : ''}
       </div>
@@ -173,6 +255,11 @@ function renderGmailThread(l) {
 
 function bindGmailThreadEvents(l) {
   const manual = expandedMsgSets.get(l.id) || new Set();
+  loadThreadImages($('#gmail-thread') || document);
+  document.querySelectorAll('#gmail-thread [data-att-view]').forEach((el) =>
+    el.addEventListener('click', (e) => { e.stopPropagation(); openLightbox(el.dataset.attView, el.dataset.name); }));
+  document.querySelectorAll('#gmail-thread [data-att-dl]').forEach((el) =>
+    el.addEventListener('click', (e) => { e.stopPropagation(); downloadAttachment(el.dataset.attDl, el.dataset.name); }));
   document.querySelectorAll('.gmail-row.collapsed[data-mid]').forEach((el) =>
     el.addEventListener('click', () => {
       manual.has(Number(el.dataset.mid)) ? manual.delete(Number(el.dataset.mid)) : manual.add(Number(el.dataset.mid));
@@ -940,7 +1027,13 @@ function closeDrawer() {
   $('#drawer-backdrop').classList.add('hidden');
 }
 $('#drawer-backdrop').addEventListener('click', closeDrawer);
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  // close the top-most layer only
+  if (!$('#lightbox').classList.contains('hidden')) $('#lightbox').classList.add('hidden');
+  else if (!$('#day-backdrop').classList.contains('hidden')) closeDayView();
+  else closeDrawer();
+});
 
 async function openLead(id) {
   const l = await api('/leads/' + id);
@@ -994,6 +1087,13 @@ async function openLead(id) {
       <h3>Conversation</h3>
       ${renderGmailThread(l)}
       <div class="reply-box" id="reply-box-anchor">
+        <div class="addr-row"><span class="addr-label">To</span><span class="addr-to">${esc(l.client_email)}</span></div>
+        <div class="addr-row">
+          <label class="addr-label" for="d-cc">Cc</label>
+          <input id="d-cc" type="text" inputmode="email" autocomplete="off" spellcheck="false"
+                 placeholder="Add people to copy in — separate with commas" value="${esc(l.reply_cc || '')}" ${canEmail ? '' : 'disabled'}>
+        </div>
+        <div class="cc-suggest" id="d-cc-suggest"></div>
         <textarea id="d-reply" placeholder="Write your reply — it sends from your Gmail…" ${canEmail ? '' : 'disabled'}>${esc(l.draft_reply || '')}</textarea>
         <div id="d-file-list" class="file-list"></div>
         <div class="reply-actions">
@@ -1109,6 +1209,33 @@ async function openLead(id) {
   });
   replyBox.addEventListener('blur', saveDraftNow);
 
+  // --- Cc: remembered per lead, with one-tap suggestions for anyone else
+  // who was on the latest email (a spouse, a travel agent, an assistant) ---
+  const ccBox = $('#d-cc');
+  const ccNow = () => new Set(ccBox.value.split(/[,;\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean));
+  function renderCcSuggestions() {
+    const last = [...l.messages].reverse().find((m) => m.direction === 'in');
+    const skip = new Set([l.client_email?.toLowerCase(), (gmailStatus?.email || '').toLowerCase(), ...ccNow()]);
+    const others = last ? `${last.to_emails || ''}, ${last.cc || ''}`.split(',')
+      .map((s) => s.trim().toLowerCase()).filter((e) => e && !skip.has(e)) : [];
+    const unique = [...new Set(others)];
+    $('#d-cc-suggest').innerHTML = unique.length && canEmail
+      ? `Also on the last email: ${unique.map((e) =>
+          `<button class="cc-add" data-cc="${esc(e)}">+ ${esc(e)}</button>`).join(' ')}`
+      : '';
+    $('#d-cc-suggest').querySelectorAll('[data-cc]').forEach((b) => b.addEventListener('click', () => {
+      ccBox.value = [...ccNow(), b.dataset.cc].join(', ');
+      saveCc();
+      renderCcSuggestions();
+    }));
+  }
+  async function saveCc() {
+    try { await api(`/leads/${id}/draft`, { method: 'PATCH', body: JSON.stringify({ cc: ccBox.value }) }); }
+    catch { /* best effort */ }
+  }
+  ccBox.addEventListener('change', () => { saveCc(); renderCcSuggestions(); });
+  renderCcSuggestions();
+
   // --- footer button: insert the signature at the bottom of the message ---
   $('#d-footer')?.addEventListener('click', async () => {
     const { image } = await api('/signature-image');
@@ -1175,6 +1302,7 @@ async function openLead(id) {
         method: 'POST',
         body: JSON.stringify({
           body,
+          cc: $('#d-cc').value,
           attachments: pendingFiles.map(({ filename, mimeType, data }) => ({ filename, mimeType, data }))
         })
       });

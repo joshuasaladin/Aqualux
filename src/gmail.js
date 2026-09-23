@@ -194,6 +194,81 @@ function parseFrom(fromHeader) {
   return { name: '', email: fromHeader.trim().toLowerCase() };
 }
 
+/** Every email address in a To/Cc header, lowercased: "A <a@x>, b@y" -> "a@x, b@y". */
+function addressList(headerValue) {
+  return [...new Set((headerValue.match(/[^\s<>,;"']+@[^\s<>,;"']+\.[^\s<>,;"']+/g) || [])
+    .map((e) => e.toLowerCase()))].join(', ');
+}
+
+/**
+ * Every part of a message that is a file — photos, PDFs, and images pasted
+ * into the body. Text/HTML body parts carry no filename, so they're skipped.
+ */
+function attachmentParts(payload, out = []) {
+  if (!payload) return out;
+  const hdr = (n) => payload.headers?.find((h) => h.name.toLowerCase() === n)?.value || '';
+  const contentId = hdr('content-id').replace(/[<>]/g, '');
+  const hasBytes = payload.body?.attachmentId || payload.body?.data;
+  // Some mail apps attach a pasted photo with a Content-ID but no filename.
+  const filename = payload.filename ||
+    (contentId && /^image\//.test(payload.mimeType || '')
+      ? `photo-${contentId.replace(/@.*$/, '').replace(/[^\w-]/g, '').slice(0, 30) || 'pasted'}.${payload.mimeType.split('/')[1].replace('jpeg', 'jpg')}`
+      : '');
+  if (filename && hasBytes && payload.partId) {
+    out.push({
+      part_id: payload.partId,
+      attachment_id: payload.body.attachmentId || null,
+      filename,
+      mime_type: payload.mimeType || 'application/octet-stream',
+      size: payload.body.size || 0,
+      content_id: contentId,
+      is_inline: /^inline/i.test(hdr('content-disposition')) || (!!contentId && !payload.filename) ? 1 : 0
+    });
+  }
+  for (const p of payload.parts || []) attachmentParts(p, out);
+  return out;
+}
+
+function recordAttachments(messageId, msg) {
+  const ins = db.prepare(`
+    INSERT OR IGNORE INTO message_attachments
+      (message_id, gmail_message_id, part_id, attachment_id, filename, mime_type, size, content_id, is_inline)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  for (const a of attachmentParts(msg.payload)) {
+    // Our own signature image rides along on every email we send — it's not
+    // something anyone needs to see as an attachment on our replies.
+    if (a.content_id === 'aqualuxsig') continue;
+    ins.run(messageId, msg.id, a.part_id, a.attachment_id, a.filename.slice(0, 200),
+            a.mime_type, a.size, a.content_id, a.is_inline);
+  }
+  db.prepare(`UPDATE messages SET attachments_scanned = 1 WHERE id = ?`).run(messageId);
+}
+
+/**
+ * The bytes of one stored attachment, straight from Gmail. Gmail's
+ * attachmentIds are not guaranteed stable between fetches, so if the stored
+ * one is rejected the message is re-read and the part found again by its
+ * (stable) part id.
+ */
+export async function fetchAttachmentBytes(att) {
+  const fromB64url = (s) => Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
+  if (att.attachment_id) {
+    try {
+      const r = await apiGet(`/messages/${att.gmail_message_id}/attachments/${att.attachment_id}`);
+      if (r.data) return fromB64url(r.data);
+    } catch { /* stale id — fall through and look the part up again */ }
+  }
+  const msg = await apiGet(`/messages/${att.gmail_message_id}?format=full`);
+  const find = (p) => p?.partId === att.part_id ? p : (p?.parts || []).map(find).find(Boolean);
+  const part = find(msg.payload);
+  if (!part) throw new Error('This attachment is no longer in Gmail');
+  if (part.body?.data) return fromB64url(part.body.data);
+  if (!part.body?.attachmentId) throw new Error('This attachment has no content');
+  const r = await apiGet(`/messages/${att.gmail_message_id}/attachments/${part.body.attachmentId}`);
+  db.prepare(`UPDATE message_attachments SET attachment_id = ? WHERE id = ?`).run(part.body.attachmentId, att.id);
+  return fromB64url(r.data);
+}
+
 /** Is this bulk/marketing mail rather than a real person? */
 export function isBulkMail(msg, from) {
   if (SKIP_SENDERS.test(from.email)) return true;
@@ -378,6 +453,9 @@ export function handleFormSubmission(form, msg) {
       .run(existing.id, msg.id, form.email, form.formName, body, sentAt);
     if (ins.changes) {
       bumpMergedCount(existing.id);
+      recordAttachments(Number(ins.lastInsertRowid), msg);
+      // a new inquiry from this person brings an archived lead back
+      db.prepare(`UPDATE leads SET archived = 0 WHERE id = ?`).run(existing.id);
       // fill in blanks from the new submission, never overwrite your edits
       if (!existing.service_date && form.serviceDate) {
         db.prepare(`UPDATE leads SET service_date = ? WHERE id = ?`).run(form.serviceDate, existing.id);
@@ -394,10 +472,11 @@ export function handleFormSubmission(form, msg) {
     INSERT INTO leads (client_id, subject, service, service_date, party_size, source)
     VALUES (?, ?, ?, ?, ?, 'website_form')`)
     .run(client.id, form.formName, form.service, form.serviceDate, form.partySize);
-  db.prepare(`
+  const msgInfo = db.prepare(`
     INSERT INTO messages (lead_id, gmail_message_id, direction, from_email, subject, body, sent_at)
     VALUES (?, ?, 'in', ?, ?, ?, ?)`)
     .run(info.lastInsertRowid, msg.id, form.email, form.formName, body, sentAt);
+  recordAttachments(Number(msgInfo.lastInsertRowid), msg);
   recomputeStatus(info.lastInsertRowid);
   return info.lastInsertRowid;
 }
@@ -505,20 +584,36 @@ export async function syncNow() {
 
 /** Store any new messages from a thread; recompute the lead's status. */
 function absorbThreadMessages(leadId, thread, myEmail) {
-  let changed = false;
+  let changed = false, newInbound = false;
   for (const msg of thread.messages || []) {
-    const exists = db.prepare(`SELECT id FROM messages WHERE gmail_message_id = ?`).get(msg.id);
-    if (exists) continue;
+    const exists = db.prepare(`
+      SELECT id, attachments_scanned, cc, to_emails FROM messages WHERE gmail_message_id = ?`).get(msg.id);
+    if (exists) {
+      // Imported before attachments / Cc were read — fill those in now.
+      if (!exists.attachments_scanned) recordAttachments(exists.id, msg);
+      if (!exists.to_emails) {
+        db.prepare(`UPDATE messages SET to_emails = ?, cc = ?, from_name = COALESCE(NULLIF(from_name, ''), ?) WHERE id = ?`)
+          .run(addressList(header(msg, 'To')), addressList(header(msg, 'Cc')),
+               parseFrom(header(msg, 'From')).name, exists.id);
+      }
+      continue;
+    }
     const from = parseFrom(header(msg, 'From'));
     const direction = from.email === myEmail ? 'out' : 'in';
-    db.prepare(`
-      INSERT INTO messages (lead_id, gmail_message_id, rfc_message_id, direction, from_email, subject, body, sent_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(leadId, msg.id, header(msg, 'Message-ID'), direction, from.email,
+    const info = db.prepare(`
+      INSERT INTO messages (lead_id, gmail_message_id, rfc_message_id, direction, from_email, from_name,
+                            to_emails, cc, subject, body, sent_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(leadId, msg.id, header(msg, 'Message-ID'), direction, from.email, from.name,
+           addressList(header(msg, 'To')), addressList(header(msg, 'Cc')),
            header(msg, 'Subject'), extractText(msg.payload) || msg.snippet || '',
            new Date(Number(msg.internalDate)).toISOString());
+    recordAttachments(Number(info.lastInsertRowid), msg);
     changed = true;
+    if (direction === 'in') newInbound = true;
   }
+  // A client writing back brings an archived lead back into the inbox.
+  if (newInbound) db.prepare(`UPDATE leads SET archived = 0 WHERE id = ?`).run(leadId);
   if (changed) recomputeStatus(leadId);
   return changed;
 }
@@ -612,9 +707,27 @@ function buildEmailSubject(lead) {
   return dateLabel ? `${activity} - ${dateLabel}` : activity;
 }
 
-export async function sendReply(lead, client, bodyText, attachments = []) {
+/**
+ * Split a free-typed Cc box ("a@x.com, b@y.com; c@z.com") into clean
+ * addresses. Returns { valid, invalid } so the caller can refuse a typo
+ * instead of silently dropping someone the user meant to copy in.
+ */
+export function parseCcList(raw) {
+  const valid = [], invalid = [];
+  for (const piece of String(raw || '').split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean)) {
+    const email = piece.replace(/^<|>$/g, '').toLowerCase();
+    if (/^[^\s@<>"',;]+@[^\s@<>"',;]+\.[a-z]{2,}$/i.test(email)) {
+      if (!valid.includes(email)) valid.push(email);
+    } else invalid.push(piece);
+  }
+  return { valid, invalid };
+}
+
+export async function sendReply(lead, client, bodyText, attachments = [], cc = []) {
   const myEmail = getSetting('gmail_email');
   if (!myEmail) throw new Error('Gmail is not connected');
+  // never Cc the client (already in To) or ourselves
+  cc = cc.filter((e) => e !== client.email.toLowerCase() && e !== myEmail.toLowerCase());
 
   const lastIn = db.prepare(`
     SELECT * FROM messages WHERE lead_id = ? AND direction = 'in'
@@ -626,6 +739,7 @@ export async function sendReply(lead, client, bodyText, attachments = []) {
   const headers = [
     `From: ${myEmail}`,
     `To: ${client.email}`,
+    ...(cc.length ? [`Cc: ${cc.join(', ')}`] : []),
     `Subject: ${encodeHeaderValue(subject.replace(/[\r\n]/g, ' '))}`,
     'MIME-Version: 1.0'
   ];
@@ -705,9 +819,12 @@ export async function sendReply(lead, client, bodyText, attachments = []) {
   const storedBody = bodyText +
     (attachments.length ? `\n\n📎 ${attachments.map((a) => a.filename).join(', ')}` : '');
   db.prepare(`
-    INSERT OR IGNORE INTO messages (lead_id, gmail_message_id, direction, from_email, subject, body, sent_at)
-    VALUES (?, ?, 'out', ?, ?, ?, ?)`)
-    .run(lead.id, sent.id || null, myEmail, subject, storedBody, new Date().toISOString());
+    INSERT OR IGNORE INTO messages (lead_id, gmail_message_id, direction, from_email, to_emails, cc, subject, body, sent_at)
+    VALUES (?, ?, 'out', ?, ?, ?, ?, ?, ?)`)
+    .run(lead.id, sent.id || null, myEmail, client.email.toLowerCase(), cc.join(', '),
+         subject, storedBody, new Date().toISOString());
+  // replying to an archived lead means it's active again
+  db.prepare(`UPDATE leads SET archived = 0 WHERE id = ?`).run(lead.id);
   recomputeStatus(lead.id);
   touchLead(lead.id);
   return sent;

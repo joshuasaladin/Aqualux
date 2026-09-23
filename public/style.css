@@ -228,6 +228,49 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--aqua); outl
   margin-top: 8px; font-size: .76rem; cursor: pointer; user-select: none; color: var(--aqua-dark);
 }
 .quoted-toggle:hover { text-decoration: underline; }
+.gmail-recips { font-size: .76rem; color: var(--muted); margin: -2px 0 6px; overflow-wrap: anywhere; }
+button.gmail-attach-chip { border: none; cursor: pointer; font: inherit; font-size: .8rem; }
+button.gmail-attach-chip:hover { background: #d3eff6; }
+.gmail-attach-chip small { color: var(--muted); margin-left: 4px; }
+.msg-files { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* photos people emailed, shown right in the message */
+.msg-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.msg-img {
+  padding: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+  width: 160px; height: 120px; overflow: hidden; cursor: zoom-in;
+}
+.msg-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.msg-img img:not([src]) { visibility: hidden; }
+.msg-img.failed::after { content: 'Couldn’t load photo'; font-size: .72rem; color: var(--muted); }
+
+.lightbox {
+  position: fixed; inset: 0; z-index: 60; background: rgba(5, 15, 25, .92);
+  display: flex; flex-direction: column;
+}
+.lightbox-bar {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px; color: #fff; font-size: .9rem;
+}
+.lightbox-bar span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lightbox-close { background: none; border: none; color: #fff; font-size: 1.8rem; line-height: 1; cursor: pointer; padding: 0 6px; }
+.lightbox img { flex: 1; min-height: 0; object-fit: contain; width: 100%; padding: 0 10px 14px; box-sizing: border-box; }
+
+/* To / Cc lines above the reply box, like a mail app */
+.addr-row {
+  display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid var(--border); padding-bottom: 6px; font-size: .88rem;
+}
+.panel .addr-label { color: var(--muted); font-size: .8rem; font-weight: 650; width: 24px; flex: 0 0 24px; margin: 0; }
+.addr-to { overflow-wrap: anywhere; }
+.addr-row input { flex: 1; min-width: 0; border: none; padding: 4px 0; background: transparent; font-size: .88rem; }
+.addr-row input:focus { outline: none; }
+.addr-row:focus-within { border-bottom-color: var(--aqua); }
+.cc-suggest { font-size: .78rem; color: var(--muted); }
+.cc-suggest:empty { display: none; }
+.cc-add {
+  border: 1px dashed var(--aqua); background: #f0fafc; color: var(--aqua-dark);
+  border-radius: 999px; padding: 2px 9px; font-size: .76rem; cursor: pointer; margin: 2px 2px 0 0;
+}
 
 .reply-box { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
 /* auto-grows up to a max height (see autoGrow() in app.js); overflow-y:auto
