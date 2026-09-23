@@ -497,8 +497,21 @@ export async function syncNow() {
     //    lead). Searches ALL mail, not just the inbox, so emails that Gmail
     //    filters auto-label or archive (skip the inbox) are still found.
     const list = await apiGet(`/threads?q=${encodeURIComponent(`after:${since} -in:spam -in:trash`)}&maxResults=50`);
+    const refreshed = new Set();
     for (const t of list.threads || []) {
-      if (db.prepare(`SELECT 1 FROM lead_threads WHERE thread_id = ?`).get(t.id)) continue;
+      // Gmail lists threads by most recent activity, so an existing lead's
+      // thread showing up here may have a new reply. Read it now — step 2
+      // below only covers the 150 most recently updated leads, and a client
+      // answering a months-old conversation would otherwise be missed.
+      const tracked = db.prepare(`SELECT lead_id FROM lead_threads WHERE thread_id = ?`).get(t.id);
+      if (tracked) {
+        try {
+          const thread = await apiGet(`/threads/${t.id}?format=full`);
+          if (absorbThreadMessages(tracked.lead_id, thread, myEmail)) updated++;
+          refreshed.add(t.id);
+        } catch { /* picked up again on the next sync */ }
+        continue;
+      }
       if (db.prepare(`SELECT 1 FROM processed_threads WHERE thread_id = ?`).get(t.id)) continue;
       const thread = await apiGet(`/threads/${t.id}?format=full`);
       const first = thread.messages?.[0];
@@ -565,6 +578,7 @@ export async function syncNow() {
       JOIN leads l ON l.id = lt.lead_id
       ORDER BY l.updated_at DESC LIMIT 150`).all();
     for (const row of tracked) {
+      if (refreshed.has(row.thread_id)) continue; // already read above
       try {
         const thread = await apiGet(`/threads/${row.thread_id}?format=full`);
         if (absorbThreadMessages(row.lead_id, thread, myEmail)) updated++;

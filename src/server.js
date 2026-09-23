@@ -154,12 +154,14 @@ app.get('/api/leads', (req, res) => {
   const where = [];
   const params = [];
   // Confirmed bookings live in their own tab (+ Calendar/Clients) — the main
-  // Leads list shows only the active, not-yet-confirmed pipeline.
-  where.push(tab === 'confirmed' ? 'l.booking_confirmed = 1' : 'l.booking_confirmed = 0');
+  // Leads list shows only the active, not-yet-confirmed pipeline. Archived
+  // leads (dead ends, spam, "just asking") are kept out of it unless asked for.
+  if (tab === 'confirmed') where.push('l.booking_confirmed = 1');
+  else where.push('l.booking_confirmed = 0', req.query.archived === '1' ? 'l.archived = 1' : 'l.archived = 0');
   if (q) {
-    where.push(`(c.name LIKE ? OR c.email LIKE ? OR l.service LIKE ? OR l.subject LIKE ?)`);
+    where.push(`(c.name LIKE ? OR c.email LIKE ? OR c.phone LIKE ? OR l.service LIKE ? OR l.subject LIKE ? OR l.notes LIKE ?)`);
     const like = `%${q}%`;
-    params.push(like, like, like, like);
+    params.push(like, like, like, like, like, like);
   }
   // 'newest' = most recent email/lead activity first; default = soonest
   // service date first with paid+confirmed sinking to the bottom.
@@ -178,7 +180,8 @@ app.get('/api/leads', (req, res) => {
 app.get('/api/leads/summary', (req, res) => {
   const s = db.prepare(`
     SELECT
-      SUM(l.status IN ('new_lead','new_mail')) AS needs_reply,
+      SUM(l.status IN ('new_lead','new_mail') AND l.archived = 0) AS needs_reply,
+      SUM(l.archived = 1) AS archived,
       SUM(l.booking_confirmed = 1 AND (l.paid = 0 OR COALESCE(s.owed, 0) > 0)) AS confirmed_unpaid,
       SUM(CASE WHEN l.booking_confirmed = 0 THEN 0
                WHEN s.lead_id IS NOT NULL THEN s.owed
@@ -255,7 +258,14 @@ app.patch('/api/leads/:id', async (req, res) => {
   const id = req.params.id;
   const lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(id);
   if (!lead) return res.status(404).json({ error: 'Not found' });
-  const { service, service_date, service_time, paid, booking_confirmed, price, notes, status, party_size, services } = req.body || {};
+  const { service, service_date, service_time, paid, booking_confirmed, price, notes, status, party_size, services,
+          archived, client_phone } = req.body || {};
+  if (archived !== undefined) db.prepare(`UPDATE leads SET archived = ? WHERE id = ?`).run(archived ? 1 : 0, id);
+  // the phone lives on the client (shared by all their leads) — editable
+  // from the lead so a number found in an email can be saved on the spot
+  if (client_phone !== undefined) {
+    db.prepare(`UPDATE clients SET phone = ? WHERE id = ?`).run(String(client_phone).trim().slice(0, 40), lead.client_id);
+  }
   if (service !== undefined) db.prepare(`UPDATE leads SET service = ? WHERE id = ?`).run(service, id);
   if (service_date !== undefined) {
     db.prepare(`UPDATE leads SET service_date = ? WHERE id = ?`).run(service_date || null, id);
@@ -589,9 +599,16 @@ app.get('/api/clients', (req, res) => {
   const rows = db.prepare(`
     SELECT c.*,
            COUNT(l.id) AS lead_count,
-           COALESCE(SUM(CASE WHEN l.paid = 1 THEN l.price ELSE 0 END), 0) AS total_paid,
+           -- money actually received: the ticked lines of a lead's services
+           -- list, or its price when it has no list and is marked Paid
+           COALESCE(SUM(CASE WHEN s.lead_id IS NOT NULL THEN s.received
+                             WHEN l.paid = 1 THEN l.price ELSE 0 END), 0) AS total_paid,
            MAX(l.updated_at) AS last_activity
     FROM clients c LEFT JOIN leads l ON l.client_id = c.id
+    LEFT JOIN (
+      SELECT lead_id, SUM(downpayment * downpayment_paid + balance * balance_paid) AS received
+      FROM lead_services GROUP BY lead_id
+    ) s ON s.lead_id = l.id
     ${q ? 'WHERE c.name LIKE ? OR c.email LIKE ? OR c.phone LIKE ?' : ''}
     GROUP BY c.id ORDER BY last_activity DESC NULLS LAST, c.created_at DESC LIMIT 500`)
     .all(...(q ? [q, q, q] : []));
@@ -611,15 +628,52 @@ app.patch('/api/clients/:id', (req, res) => {
   const client = db.prepare(`SELECT * FROM clients WHERE id = ?`).get(req.params.id);
   if (!client) return res.status(404).json({ error: 'Not found' });
   const { name, email, phone, notes } = req.body || {};
-  db.prepare(`UPDATE clients SET name = COALESCE(?, name), email = COALESCE(?, email),
-              phone = COALESCE(?, phone), notes = COALESCE(?, notes) WHERE id = ?`)
-    .run(name ?? null, email ?? null, phone ?? null, notes ?? null, client.id);
+  if (name !== undefined && !String(name).trim()) return res.status(400).json({ error: 'Name can’t be empty' });
+  if (email !== undefined && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim())) {
+    return res.status(400).json({ error: 'That doesn’t look like an email address' });
+  }
+  try {
+    db.prepare(`UPDATE clients SET name = COALESCE(?, name), email = COALESCE(?, email),
+                phone = COALESCE(?, phone), notes = COALESCE(?, notes) WHERE id = ?`)
+      .run(name?.trim() ?? null, email?.trim().toLowerCase() ?? null, phone?.trim() ?? null, notes ?? null, client.id);
+  } catch (err) {
+    if (/UNIQUE/i.test(err.message)) return res.status(409).json({ error: 'Another client already has that email' });
+    throw err;
+  }
   res.json(db.prepare(`SELECT * FROM clients WHERE id = ?`).get(client.id));
 });
 
-app.delete('/api/clients/:id', (req, res) => {
+app.delete('/api/clients/:id', async (req, res) => {
+  // Same care as deleting one lead: remember every Gmail thread so the next
+  // sync doesn't re-import this person, and pull their calendar events.
+  for (const l of db.prepare(`SELECT id, gmail_thread_id, gcal_event_id FROM leads WHERE client_id = ?`).all(req.params.id)) {
+    if (l.gmail_thread_id) markThreadProcessed(l.gmail_thread_id);
+    for (const t of db.prepare(`SELECT thread_id FROM lead_threads WHERE lead_id = ?`).all(l.id)) {
+      markThreadProcessed(t.thread_id);
+    }
+    if (l.gcal_event_id) {
+      try { await gmail.deleteCalendarEvent(l.gcal_event_id); } catch { /* best effort */ }
+    }
+  }
   db.prepare(`DELETE FROM clients WHERE id = ?`).run(req.params.id);
   res.json({ ok: true });
+});
+
+// ------------------------------------------------------ reply templates ----
+// Saved replies ("Thanks for your inquiry…", "Here's our chef menu…") with
+// {first_name} / {service} / {date} / {party_size} filled in when inserted.
+app.get('/api/templates', (req, res) => {
+  res.json(getSetting('reply_templates', []));
+});
+
+app.put('/api/templates', (req, res) => {
+  const list = Array.isArray(req.body) ? req.body : [];
+  const clean = list
+    .filter((t) => t && String(t.name || '').trim() && String(t.body || '').trim())
+    .slice(0, 100)
+    .map((t) => ({ name: String(t.name).trim().slice(0, 80), body: String(t.body).slice(0, 10000) }));
+  setSetting('reply_templates', clean);
+  res.json(clean);
 });
 
 // -------------------------------------------------------------- static ----
@@ -734,12 +788,19 @@ seedServiceCatalog();
 
 // One-time cleanup: remove leads created from Google Calendar RSVP
 // notifications ("Accepted: ...") before that filter existed.
+// This runs on every boot, so it must never catch a real conversation: a
+// lead only goes if EVERY message on it is a calendar notification. (It used
+// to delete a lead if any one message mentioned "Join with Google Meet" —
+// e.g. a client pasting a meeting link — taking the client with it.)
 {
   const rsvpLeadIds = db.prepare(`SELECT id, subject, gmail_thread_id, client_id FROM leads`).all()
     .filter((l) => {
-      if (gmail.isCalendarNotification(l.subject, '')) return true;
-      const msgs = db.prepare(`SELECT body FROM messages WHERE lead_id = ?`).all(l.id);
-      return msgs.some((m) => gmail.isCalendarNotification('', m.body));
+      const msgs = db.prepare(`SELECT subject, body, direction FROM messages WHERE lead_id = ?`).all(l.id);
+      if (!msgs.length) return false;
+      // subject only ("Accepted: …", "Invitation: …" — Google's own
+      // prefixes); body text alone is too loose to delete anything over
+      return msgs.every((m) => m.direction === 'in' &&
+        gmail.isCalendarNotification(m.subject || l.subject, ''));
     });
   for (const l of rsvpLeadIds) {
     if (l.gmail_thread_id) markThreadProcessed(l.gmail_thread_id);

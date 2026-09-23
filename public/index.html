@@ -49,12 +49,17 @@
     <section id="view-leads" class="view">
       <div class="stat-grid" id="stat-grid"></div>
       <div class="filters">
-        <input type="search" id="lead-search" placeholder="Search name, email, service…">
+        <input type="search" id="lead-search" placeholder="Search name, email, phone, service, notes…">
         <select id="lead-sort" title="Sort order">
           <option value="date">Sort: Soonest service date</option>
           <option value="newest">Sort: Newest emails first</option>
         </select>
         <button class="btn" id="btn-sync">⟳ Sync Gmail</button>
+        <button class="btn" id="btn-archived" title="Leads you've archived">🗄️ Archived</button>
+      </div>
+      <div id="archived-banner" class="archived-banner hidden">
+        Showing <b>archived</b> leads — they come back to the list on their own if the person writes again.
+        <button class="btn btn-sm" id="btn-archived-back">← Back to active leads</button>
       </div>
       <div id="lead-list" class="card-list"></div>
     </section>
@@ -126,6 +131,18 @@
         <textarea id="sig-text" rows="9" spellcheck="false"></textarea>
         <button class="btn btn-primary btn-sm" id="sig-save" style="margin-top:8px">Save signature</button>
         <span class="send-status" id="sig-status"></span>
+      </div>
+      <h2>Reply templates</h2>
+      <div class="panel">
+        <p class="reply-hint" style="margin-bottom:10px">Answers you send often — pick one from <b>📝 Templates</b> in any lead's reply box.
+          These get filled in automatically: <code>{first_name}</code> <code>{name}</code> <code>{service}</code>
+          <code>{date}</code> <code>{time}</code> <code>{party_size}</code></p>
+        <div id="tpl-list" class="tpl-list"></div>
+        <div style="display:flex; gap:8px; align-items:center; margin-top:10px">
+          <button class="btn btn-sm" id="tpl-add">+ Add template</button>
+          <button class="btn btn-primary btn-sm" id="tpl-save">Save templates</button>
+          <span class="send-status" id="tpl-status"></span>
+        </div>
       </div>
     </section>
   </main>

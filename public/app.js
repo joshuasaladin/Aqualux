@@ -408,11 +408,14 @@ function bindLeadCards(container) {
 }
 
 let leadTimer;
+let showArchived = false;
 async function loadLeads() {
   const params = new URLSearchParams();
   if ($('#lead-search').value) params.set('q', $('#lead-search').value);
   const sort = $('#lead-sort').value;
   if (sort && sort !== 'date') params.set('sort', sort);
+  if (showArchived) params.set('archived', '1');
+  $('#archived-banner').classList.toggle('hidden', !showArchived);
   const [summary, rows] = await Promise.all([
     api('/leads/summary'),
     api('/leads' + (params.size ? '?' + params : ''))
@@ -424,11 +427,19 @@ async function loadLeads() {
     <div class="stat"><div class="num">${summary.upcoming || 0}</div><div class="label">Upcoming bookings</div></div>
     <div class="stat"><div class="num">${summary.total || 0}</div><div class="label">Total leads</div></div>`;
   updateConfirmedDot(summary);
+  $('#btn-archived').textContent = `🗄️ Archived${summary.archived ? ` (${summary.archived})` : ''}`;
+  $('#btn-archived').classList.toggle('hidden', showArchived);
+  const emptyMsg = showArchived ? 'Nothing archived.'
+    : $('#lead-search').value ? 'No leads match that search.'
+    : 'No leads yet. Connect Gmail in Settings — new emails will appear here automatically.';
   $('#lead-list').innerHTML = rows.length
     ? rows.map(leadCard).join('')
-    : `<div class="empty">No leads yet. Connect Gmail in Settings — new emails will appear here automatically.</div>`;
+    : `<div class="empty">${emptyMsg}</div>`;
   bindLeadCards('#lead-list');
 }
+
+$('#btn-archived').addEventListener('click', () => { showArchived = true; loadLeads(); });
+$('#btn-archived-back').addEventListener('click', () => { showArchived = false; loadLeads(); });
 
 $('#lead-search').addEventListener('input', () => {
   clearTimeout(leadTimer); leadTimer = setTimeout(loadLeads, 250);
@@ -1022,6 +1033,37 @@ $('#client-search').addEventListener('input', () => {
 });
 
 /* --------------------------------------------------------- lead drawer --- */
+/**
+ * wa.me link for a phone number however it was typed. Numbers with a +/00
+ * country code are used as-is; a bare 7-digit number is a local Aruba one
+ * (+297) and a bare 10-digit one is US/Canada (+1).
+ */
+function whatsappUrl(phone) {
+  let d = String(phone || '').trim().replace(/[^\d+]/g, '');
+  if (d.startsWith('+')) d = d.slice(1);
+  else if (d.startsWith('00')) d = d.slice(2);
+  else if (d.length === 7) d = '297' + d;
+  else if (d.length === 10) d = '1' + d;
+  d = d.replace(/\D/g, '');
+  return d.length >= 8 ? `https://wa.me/${d}` : '';
+}
+
+/** Fill a saved reply's {placeholders} from the lead. Unknown values become blank. */
+function fillTemplate(body, l) {
+  const date = l.service_date
+    ? new Date(l.service_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
+    : '';
+  const values = {
+    first_name: (l.client_name || '').split(' ')[0],
+    name: l.client_name || '',
+    service: l.service || '',
+    date,
+    time: l.service_time ? fmtTime(l.service_time) : '',
+    party_size: l.party_size ? String(l.party_size) : ''
+  };
+  return body.replace(/\{(\w+)\}/g, (m, key) => (key in values ? values[key] : m));
+}
+
 function closeDrawer() {
   $('#drawer').classList.add('hidden');
   $('#drawer-backdrop').classList.add('hidden');
@@ -1036,17 +1078,25 @@ document.addEventListener('keydown', (e) => {
 });
 
 async function openLead(id) {
-  const l = await api('/leads/' + id);
+  const [l, templates] = await Promise.all([api('/leads/' + id), api('/templates').catch(() => [])]);
   const canEmail = gmailStatus?.connected;
+  const wa = whatsappUrl(l.client_phone);
+  const needsReply = l.status === 'new_lead' || l.status === 'new_mail';
   $('#drawer-content').innerHTML = `
   <div class="drawer-head">
     <button class="close" id="drawer-close">×</button>
     <h2>${esc(l.client_name)} ${statusBadge(l.status)}
+      ${l.archived ? '<span class="badge archived">Archived</span>' : ''}
       ${l.merged_count > 1 ? `<span class="badge multi">📨 ${l.merged_count} submissions</span>` : ''}</h2>
     <div class="client-line">
       <a href="mailto:${esc(l.client_email)}">${esc(l.client_email)}</a>
-      ${l.client_phone ? ' · ' + esc(l.client_phone) : ''}
+      ${l.client_phone ? ` · <a href="tel:${esc(l.client_phone.replace(/[^\d+]/g, ''))}">${esc(l.client_phone)}</a>` : ''}
+      ${wa ? ` · <a href="${wa}" target="_blank" rel="noopener" class="wa-link">WhatsApp</a>` : ''}
       ${l.subject ? ' · ' + esc(l.subject) : ''}
+    </div>
+    <div class="drawer-actions">
+      <button class="btn btn-sm" id="d-mark-replied">${needsReply ? '✓ Mark as replied' : '↩ Mark as needs reply'}</button>
+      ${l.booking_confirmed ? '' : `<button class="btn btn-sm" id="d-archive">${l.archived ? '📤 Unarchive' : '🗄️ Archive'}</button>`}
     </div>
   </div>
   <div class="drawer-body">
@@ -1057,6 +1107,7 @@ async function openLead(id) {
         <label>Service requested<input id="d-service" value="${esc(l.service)}" placeholder="e.g. Yacht charter"></label>
         <label>How many people<input id="d-party" type="number" min="1" step="1" value="${l.party_size || ''}" placeholder="e.g. 8"></label>
       </div>
+      <label>Client phone / WhatsApp<input id="d-phone" type="tel" value="${esc(l.client_phone || '')}" placeholder="e.g. +1 305 555 0117 or 567 0134"></label>
       <div class="form-row">
         <label>Service date<input id="d-date" type="date" value="${l.service_date || ''}"></label>
         <label>Start time<input id="d-time" type="time" value="${l.service_time || ''}"></label>
@@ -1100,6 +1151,10 @@ async function openLead(id) {
           <button class="btn btn-primary" id="d-send" ${canEmail ? '' : 'disabled'}>Send reply ✉️</button>
           <button class="btn" id="d-attach" ${canEmail ? '' : 'disabled'} title="Attach files">📎 Attach</button>
           <button class="btn" id="d-footer" ${canEmail ? '' : 'disabled'} title="Insert your footer at the bottom of the message">Footer</button>
+          <select id="d-template" class="template-pick" ${canEmail ? '' : 'disabled'} title="Insert a saved reply">
+            <option value="">${templates.length ? '📝 Templates…' : '📝 Templates (add in Settings)'}</option>
+            ${templates.map((t, i) => `<option value="${i}">${esc(t.name)}</option>`).join('')}
+          </select>
           <input type="file" id="d-files" multiple hidden>
           <span class="send-status" id="d-draft-status"></span>
           <span class="send-status" id="d-send-status">${canEmail ? '' :
@@ -1116,6 +1171,19 @@ async function openLead(id) {
     e.preventDefault(); closeDrawer(); showView('settings');
   });
   bindGmailThreadEvents(l);
+
+  // For leads answered by phone or WhatsApp — otherwise they'd sit in
+  // "Waiting on your reply" forever. A new email from them flips it back.
+  $('#d-mark-replied').addEventListener('click', async () => {
+    await api('/leads/' + id, { method: 'PATCH', body: JSON.stringify({ status: needsReply ? 'responded' : 'new_mail' }) });
+    openLead(id);
+    refreshCurrentView();
+  });
+  $('#d-archive')?.addEventListener('click', async () => {
+    await api('/leads/' + id, { method: 'PATCH', body: JSON.stringify({ archived: !l.archived }) });
+    if (l.archived) openLead(id); else closeDrawer();
+    refreshCurrentView();
+  });
 
   // --- services editor ---
   const svcRows = $('#svc-rows');
@@ -1166,6 +1234,7 @@ async function openLead(id) {
         service_date: $('#d-date').value || null,
         service_time: $('#d-time').value || null,
         party_size: $('#d-party').value || null,
+        client_phone: $('#d-phone').value,
         paid: $('#d-paid').checked,
         booking_confirmed: $('#d-confirmed').checked,
         notes: $('#d-notes').value,
@@ -1256,6 +1325,24 @@ async function openLead(id) {
     saveDraftNow();
   });
 
+  // --- saved replies: fill in the lead's details and drop the text in at
+  // the cursor (or as the whole message when the box is empty) ---
+  $('#d-template').addEventListener('change', (e) => {
+    const t = templates[Number(e.target.value)];
+    e.target.value = '';
+    if (!t) return;
+    const text = fillTemplate(t.body, l);
+    if (!replyBox.value.trim()) replyBox.value = text;
+    else {
+      const at = replyBox.selectionStart ?? replyBox.value.length;
+      replyBox.value = replyBox.value.slice(0, at) + text + replyBox.value.slice(at);
+    }
+    autoGrow();
+    replyBox.focus();
+    draftDirty = true;
+    saveDraftNow();
+  });
+
   // --- attachments ---
   let pendingFiles = [];
   const MAX_TOTAL = 25 * 1024 * 1024; // Gmail's own hard cap on total outgoing message size
@@ -1337,13 +1424,20 @@ async function openClient(id) {
     <h2>${esc(c.name)}</h2>
     <div class="client-line">
       <a href="mailto:${esc(c.email)}">${esc(c.email)}</a>${c.phone ? ' · ' + esc(c.phone) : ''}
+      ${whatsappUrl(c.phone) ? ` · <a href="${whatsappUrl(c.phone)}" target="_blank" rel="noopener" class="wa-link">WhatsApp</a>` : ''}
     </div>
   </div>
   <div class="drawer-body">
     <div class="panel">
-      <h3>Notes</h3>
-      <textarea id="c-notes" rows="3" placeholder="Preferences, VIP status, allergies…">${esc(c.notes)}</textarea>
-      <button class="btn btn-primary btn-sm" id="c-save" style="margin-top:8px">Save notes</button>
+      <h3>Contact details</h3>
+      <div class="form-row">
+        <label>Name<input id="c-name" value="${esc(c.name)}"></label>
+        <label>Phone / WhatsApp<input id="c-phone" type="tel" value="${esc(c.phone || '')}" placeholder="e.g. +1 305 555 0117"></label>
+      </div>
+      <label>Email<input id="c-email" type="email" value="${esc(c.email)}"></label>
+      <label>Notes<textarea id="c-notes" rows="3" placeholder="Preferences, VIP status, allergies…">${esc(c.notes)}</textarea></label>
+      <button class="btn btn-primary btn-sm" id="c-save">Save</button>
+      <span class="send-status" id="c-save-status"></span>
     </div>
     <div class="panel">
       <h3>Leads (${c.leads.length})</h3>
@@ -1362,9 +1456,19 @@ async function openClient(id) {
 
   $('#drawer-close').addEventListener('click', closeDrawer);
   $('#c-save').addEventListener('click', async () => {
-    await api('/clients/' + id, { method: 'PATCH', body: JSON.stringify({ notes: $('#c-notes').value }) });
-    $('#c-save').textContent = 'Saved ✓';
-    setTimeout(() => { $('#c-save').textContent = 'Save notes'; }, 1500);
+    const st = $('#c-save-status');
+    st.classList.remove('err');
+    try {
+      await api('/clients/' + id, { method: 'PATCH', body: JSON.stringify({
+        name: $('#c-name').value, email: $('#c-email').value,
+        phone: $('#c-phone').value, notes: $('#c-notes').value
+      }) });
+      openClient(id);
+      refreshCurrentView();
+    } catch (err) {
+      st.classList.add('err');
+      st.textContent = err.message;
+    }
   });
   document.querySelectorAll('#drawer-content [data-lead]').forEach((el) =>
     el.addEventListener('click', () => openLead(el.dataset.lead)));
@@ -1422,6 +1526,56 @@ async function loadSettings() {
     renderSigImage();
   };
 
+  // --- reply templates ---
+  const STARTER_TEMPLATES = [
+    { name: 'Thanks for your inquiry',
+      body: 'Hi {first_name},\n\nThank you for reaching out to Aqua Lux Aruba! We would love to help arrange your {service}.\n\n' },
+    { name: 'Booking confirmed',
+      body: 'Hi {first_name},\n\nGreat news — your {service} on {date} is confirmed! We will send you all the details closer to the date.\n\n' }
+  ];
+  let tpls = await api('/templates');
+  function renderTemplates() {
+    $('#tpl-list').innerHTML = tpls.length ? tpls.map((t, i) => `
+      <div class="tpl-row" data-i="${i}">
+        <div class="tpl-row-head">
+          <input class="tpl-name" value="${esc(t.name)}" placeholder="Template name, e.g. Chef menu options">
+          <button class="btn btn-sm btn-danger tpl-del" title="Delete template">×</button>
+        </div>
+        <textarea class="tpl-body" rows="5" placeholder="Hi {first_name}, …">${esc(t.body)}</textarea>
+      </div>`).join('')
+      : `<div class="empty" style="padding:14px">No templates yet. <a href="#" id="tpl-starters">Add two starter templates</a> to edit, or click “+ Add template”.</div>`;
+    $('#tpl-list').querySelectorAll('.tpl-del').forEach((b) => b.addEventListener('click', () => {
+      collectTemplates();
+      tpls.splice(Number(b.closest('.tpl-row').dataset.i), 1);
+      renderTemplates();
+    }));
+    $('#tpl-starters')?.addEventListener('click', (e) => {
+      e.preventDefault(); tpls = STARTER_TEMPLATES.map((t) => ({ ...t })); renderTemplates();
+    });
+  }
+  function collectTemplates() {
+    tpls = [...$('#tpl-list').querySelectorAll('.tpl-row')].map((r) => ({
+      name: r.querySelector('.tpl-name').value, body: r.querySelector('.tpl-body').value
+    }));
+  }
+  renderTemplates();
+  $('#tpl-add').onclick = () => {
+    collectTemplates();
+    tpls.push({ name: '', body: '' });
+    renderTemplates();
+    $('#tpl-list').querySelector('.tpl-row:last-child .tpl-name')?.focus();
+  };
+  $('#tpl-save').onclick = async () => {
+    collectTemplates();
+    const incomplete = tpls.filter((t) => !t.name.trim() || !t.body.trim()).length;
+    tpls = await api('/templates', { method: 'PUT', body: JSON.stringify(tpls) });
+    renderTemplates();
+    $('#tpl-status').textContent = incomplete
+      ? `Saved ✓ — ${incomplete} without a name or text was left out`
+      : 'Saved ✓';
+    setTimeout(() => { $('#tpl-status').textContent = ''; }, 3000);
+  };
+
   const panel = $('#gmail-panel');
 
   if (s.connected) {
@@ -1444,7 +1598,7 @@ async function loadSettings() {
           <span class="who">Google Calendar connected</span>
           <button class="btn btn-sm" id="s-cal-sync">🗓️ Sync confirmed bookings now</button>
         </div>
-        <p class="reply-hint">Every confirmed, dated booking syncs to your Google Calendar automatically as a <b>yellow</b> all-day event. The CRM's own Calendar tab never reads anything back — it stays showing just your confirmed bookings.</p>
+        <p class="reply-hint">Every confirmed, dated booking syncs to your Google Calendar automatically as a <b>yellow</b> event — at its start time when one is set, otherwise all day. Massage bookings also invite your massage provider (mylovelybodyaruba@gmail.com) with a Google Meet link. The CRM's own Calendar tab never reads anything back — it stays showing just your confirmed bookings.</p>
         <span class="send-status" id="s-cal-status"></span>` : `
         <div class="gmail-connected">
           <span class="dot dot-off"></span>
