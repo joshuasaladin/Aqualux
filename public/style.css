@@ -93,6 +93,10 @@ main { max-width: 1060px; margin: 0 auto; padding: 22px; }
 .stat .num { font-size: 1.6rem; font-weight: 700; color: var(--navy); }
 .stat .num.green { color: var(--green); }
 .stat .num.amber { color: var(--amber); }
+.stat .num.red { color: var(--red); }
+/* tiles that jump somewhere when tapped */
+button.stat { font: inherit; text-align: left; cursor: pointer; width: 100%; }
+button.stat:hover { border-color: var(--aqua); box-shadow: 0 2px 8px rgba(15, 127, 150, .1); }
 .stat .label { color: var(--muted); font-size: .84rem; margin-top: 2px; }
 
 /* -------------------------------------------------------------- cards --- */
@@ -143,6 +147,59 @@ main { max-width: 1060px; margin: 0 auto; padding: 22px; }
   padding: 10px 14px; font-size: .88rem; color: var(--muted);
 }
 .archived-banner .btn { margin-left: auto; }
+/* New leads | Responded switch */
+.lead-tabs { display: flex; gap: 6px; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
+.lead-tab {
+  background: none; border: none; border-bottom: 3px solid transparent; margin-bottom: -1px;
+  padding: 8px 14px 9px; font: inherit; font-weight: 600; color: var(--muted); cursor: pointer;
+}
+.lead-tab.active { color: var(--navy); border-bottom-color: var(--aqua); }
+.lead-tab-count {
+  display: inline-block; min-width: 22px; padding: 1px 7px; margin-left: 4px; border-radius: 999px;
+  background: #e9edf1; color: var(--muted); font-size: .78rem; text-align: center;
+}
+.lead-tab[data-group="new"] .lead-tab-count { background: #e4f6ec; color: var(--green); }
+.lead-tab[data-group="responded"] .lead-tab-count { background: #fdeae7; color: var(--red); }
+
+/* ----------------------------------------------------------- bookings --- */
+.bk-check { display: flex; align-items: center; gap: 6px; font-size: .86rem; color: var(--muted); }
+.bk-check input { width: auto; accent-color: var(--aqua); }
+.filters #bk-period, .filters #bk-service { width: auto; min-width: 190px; }
+.bk-needs {
+  background: #fdf3dd; border: 1px solid #f1dfb0; color: #7a5a12; border-radius: 10px;
+  padding: 9px 14px; font-size: .86rem; margin-bottom: 12px;
+}
+.bk-table-wrap {
+  overflow-x: auto; background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); -webkit-overflow-scrolling: touch;
+}
+.bk-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+.bk-table th {
+  background: #2e6b50; color: #fff; text-align: left; font-weight: 650; font-size: .8rem;
+  padding: 9px 10px; white-space: nowrap; position: sticky; top: 0;
+}
+.bk-table td { padding: 8px 10px; border-top: 1px solid var(--border); vertical-align: middle; }
+.bk-table tbody tr[data-lead] { cursor: pointer; }
+.bk-table tbody tr[data-lead]:hover td { background: #f4fafb; }
+.bk-table tbody tr:nth-child(even) td { background: #fafcfd; }
+.bk-table tr.past td { color: #5c6b78; }
+.bk-table .r { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bk-table .nowrap { white-space: nowrap; }
+.bk-table .bk-name { font-weight: 600; color: var(--navy); white-space: nowrap; }
+.bk-table .bk-notes { color: var(--muted); min-width: 140px; }
+.bk-table tfoot td { font-weight: 700; background: #eef5f1; border-top: 2px solid #2e6b50; }
+.bk-table td.empty { text-align: center; color: var(--muted); padding: 24px; }
+.bk-narrow { max-width: 680px; }
+.yn {
+  display: inline-block; min-width: 42px; text-align: center; border: none; border-radius: 999px;
+  padding: 3px 10px; font: inherit; font-size: .78rem; font-weight: 650; cursor: pointer;
+}
+span.yn { cursor: default; }
+.yn-yes { background: #e4f6ec; color: var(--green); }
+.yn-partial { background: #fdf3dd; color: var(--amber); }
+.yn-no { background: #fdeae7; color: var(--red); }
+button.yn:hover { box-shadow: 0 0 0 2px currentColor inset; }
+.fill-in { color: var(--amber); font-weight: 650; font-size: .8rem; }
 input, select, textarea {
   border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px;
   font-size: .92rem; font-family: inherit; background: #fff; color: var(--text);
@@ -325,6 +382,20 @@ button.gmail-attach-chip:hover { background: #d3eff6; }
 .mini { display: flex; align-items: center; gap: 3px; font-size: .72rem; color: var(--muted); cursor: pointer; }
 .mini input { width: auto; accent-color: var(--green); }
 .svc-del { padding: 4px 8px; }
+/* booking lines in the lead drawer — one card per booked service */
+.bk-edit {
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg);
+  padding: 12px 12px 2px; margin-bottom: 10px;
+}
+.bk-edit-grid { display: grid; grid-template-columns: 2fr 1.2fr 1.4fr 1.2fr; gap: 0 10px; }
+.bk-edit-grid.bk-money { grid-template-columns: repeat(4, 1fr); }
+.bk-edit-grid.bk-last { grid-template-columns: 1.2fr 2fr auto; align-items: end; }
+.bk-edit-grid.bk-last .svc-del { margin-bottom: 10px; }
+.bk-edit input { padding: 7px 9px; font-size: .88rem; margin-top: 3px; }
+.svc-bal-show { padding: 7px 0; margin-top: 3px; font-size: .92rem; color: var(--text); font-weight: 600; }
+.mini-check { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; font-size: .78rem; color: var(--muted); }
+.mini-check input { width: auto; margin: 0; accent-color: var(--green); }
+.svc-comm-pct { display: block; font-size: .72rem; color: var(--muted); margin-top: 2px; }
 .svc-totals { margin-top: 10px; font-size: .88rem; color: var(--muted); }
 .svc-totals .ok { color: var(--green); }
 .svc-totals .due { color: var(--red); }
@@ -544,6 +615,42 @@ main.wide { max-width: 1750px; }
 @media (max-width: 640px) {
   main { padding: 14px; }
   .form-row { grid-template-columns: 1fr; }
+  .bk-edit-grid, .bk-edit-grid.bk-money { grid-template-columns: 1fr 1fr; }
+  .bk-edit-grid .bk-f-service, .bk-edit-grid .bk-f-notes { grid-column: 1 / -1; }
+  .bk-edit-grid.bk-last { grid-template-columns: 1fr; }
+  .filters #bk-period, .filters #bk-service { width: 100%; }
+  /* bookings table -> one card per booking, so nothing needs sideways scrolling */
+  .bk-table-wrap { overflow-x: visible; background: none; border: none; }
+  #bk-table thead { display: none; }
+  #bk-table, #bk-table tbody, #bk-table tfoot { display: block; }
+  #bk-table tbody tr {
+    display: grid; grid-template-columns: 1fr auto; gap: 2px 12px;
+    grid-template-areas: "name date" "svc price" "info comm" "people people" "gp cp" "notes notes";
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 10px 12px; margin-bottom: 8px;
+  }
+  #bk-table tbody tr td { background: none !important; border: none; padding: 0; }
+  #bk-table td:empty { display: none; }
+  #bk-table .bk-name { grid-area: name; }
+  #bk-table .bk-date { grid-area: date; text-align: right; color: var(--muted); font-size: .84rem; }
+  #bk-table .bk-svc { grid-area: svc; }
+  #bk-table .bk-info { grid-area: info; color: var(--muted); font-size: .84rem; }
+  #bk-table .bk-people { grid-area: people; color: var(--muted); font-size: .84rem; }
+  #bk-table .bk-price { grid-area: price; font-weight: 650; }
+  #bk-table .bk-comm { grid-area: comm; color: var(--green); }
+  #bk-table .bk-gp { grid-area: gp; margin-top: 6px; }
+  #bk-table .bk-cp { grid-area: cp; margin-top: 6px; text-align: right; }
+  #bk-table .bk-notes { grid-area: notes; min-width: 0; font-size: .84rem; }
+  #bk-table td[data-label]:not(.bk-price)::before { content: attr(data-label) ' '; color: var(--muted); font-size: .76rem; margin-right: 4px; }
+  #bk-table tfoot tr {
+    display: flex; flex-wrap: wrap; gap: 4px 14px; background: #eef5f1;
+    border: 1px solid #c8dfd2; border-radius: var(--radius); padding: 10px 12px;
+  }
+  #bk-table tfoot td { padding: 0; border: none; background: none; }
+  #bk-table tfoot td:nth-child(2)::before { content: 'Price '; font-weight: 500; color: var(--muted); }
+  #bk-table tfoot td:nth-child(3)::before { content: 'Commission '; font-weight: 500; color: var(--muted); }
+  .lead-tab { flex: 1; padding: 8px 6px 9px; }
+  .stat-grid > :last-child:nth-child(odd) { grid-column: 1 / -1; }
   .modal { padding: 18px; }
   .filters input[type="search"] { min-width: 0; width: 100%; }
   .filters select { width: 100%; }

@@ -169,6 +169,10 @@ app.get('/api/leads', (req, res) => {
   // leads (dead ends, spam, "just asking") are kept out of it unless asked for.
   if (tab === 'confirmed') where.push('l.booking_confirmed = 1');
   else where.push('l.booking_confirmed = 0', req.query.archived === '1' ? 'l.archived = 1' : 'l.archived = 0');
+  // "New leads" = waiting on your reply (incl. a client writing back);
+  // "Responded" = the ball is in their court.
+  if (req.query.group === 'new') where.push(`l.status IN ('new_lead','new_mail')`);
+  if (req.query.group === 'responded') where.push(`l.status = 'responded'`);
   if (q) {
     where.push(`(c.name LIKE ? OR c.email LIKE ? OR c.phone LIKE ? OR l.service LIKE ? OR l.subject LIKE ? OR l.notes LIKE ?)`);
     const like = `%${q}%`;
@@ -185,29 +189,127 @@ app.get('/api/leads', (req, res) => {
   res.json(rows);
 });
 
-// "Unpaid" means money is actually still owed: either the Paid switch is off,
-// or the booking's services list still shows an outstanding balance (a
-// deposit-only booking gets switched to Paid but is not paid in full).
+// ------------------------------------------------------------- bookings ----
+/** Today's date in Aruba (UTC-4, no DST) — the server itself runs on UTC. */
+const arubaToday = () => new Date(Date.now() - 4 * 3600e3).toISOString().slice(0, 10);
+
+/**
+ * Every booked service on a confirmed lead, one row each — the bookings
+ * spreadsheet. A confirmed lead whose booking details haven't been filled
+ * in yet still shows up, as one row built from the lead itself
+ * (needs_details), so nothing confirmed is ever missing from the totals.
+ */
+function bookingRows() {
+  const rows = db.prepare(`
+    SELECT ls.id AS booking_id, l.id AS lead_id, c.name AS client_name,
+           COALESCE(ls.service_date, l.service_date) AS date,
+           COALESCE(NULLIF(ls.name, ''), l.service) AS service,
+           ls.info, ls.people, ls.downpayment + ls.balance AS price,
+           ls.downpayment * ls.downpayment_paid + ls.balance * ls.balance_paid AS received,
+           ls.commission, ls.commission_paid, ls.provider, ls.notes, 0 AS needs_details
+    FROM lead_services ls
+    JOIN leads l ON l.id = ls.lead_id JOIN clients c ON c.id = l.client_id
+    WHERE l.booking_confirmed = 1
+    UNION ALL
+    SELECT NULL, l.id, c.name, l.service_date, l.service,
+           '', COALESCE(CAST(l.party_size AS TEXT), ''), COALESCE(l.price, 0),
+           CASE WHEN l.paid = 1 THEN COALESCE(l.price, 0) ELSE 0 END,
+           0, 0, '', l.notes, 1
+    FROM leads l JOIN clients c ON c.id = l.client_id
+    WHERE l.booking_confirmed = 1
+      AND NOT EXISTS (SELECT 1 FROM lead_services WHERE lead_id = l.id)`).all();
+  for (const r of rows) {
+    r.owed = Math.max(0, (r.price || 0) - (r.received || 0));
+    // the spreadsheet's "Guest paid" column
+    r.guest_paid = r.price > 0 && r.owed === 0 ? 'yes' : r.received > 0 ? 'partial' : 'no';
+    // no commission written down yet (includes everything booked before
+    // commission tracking existed) — flagged so it gets filled in
+    r.missing_commission = !r.commission;
+  }
+  // oldest first, like the spreadsheet; undated ones at the end
+  return rows.sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999') || a.lead_id - b.lead_id);
+}
+
+const sum = (rows, key) => Math.round(rows.reduce((a, r) => a + (Number(r[key]) || 0), 0) * 100) / 100;
+
+app.get('/api/bookings', (req, res) => {
+  const { from, to, period } = req.query;
+  const today = arubaToday();
+  let rows = bookingRows();
+  if (period === 'upcoming') rows = rows.filter((r) => !r.date || r.date >= today);
+  else if (period === 'past') rows = rows.filter((r) => r.date && r.date < today);
+  if (from) rows = rows.filter((r) => r.date && r.date >= from);
+  if (to) rows = rows.filter((r) => r.date && r.date <= to);
+
+  // per service type: how many, total price, commission
+  const byService = new Map();
+  for (const r of rows) {
+    const key = r.service || '(no service)';
+    const g = byService.get(key) || { service: key, count: 0, price: 0, commission: 0 };
+    g.count++; g.price += r.price || 0; g.commission += r.commission || 0;
+    byService.set(key, g);
+  }
+  res.json({
+    rows,
+    totals: {
+      count: rows.length,
+      price: sum(rows, 'price'),
+      commission: sum(rows, 'commission'),
+      commission_received: sum(rows.filter((r) => r.commission_paid), 'commission'),
+      guests_owe: sum(rows, 'owed'),
+      needs_details: rows.filter((r) => r.needs_details || r.missing_commission).length
+    },
+    by_service: [...byService.values()]
+      .map((g) => ({ ...g, price: Math.round(g.price * 100) / 100, commission: Math.round(g.commission * 100) / 100 }))
+      .sort((a, b) => b.price - a.price)
+  });
+});
+
+// Quick ticks from the Bookings table: guest paid in full / commission received.
+app.patch('/api/bookings/:id', (req, res) => {
+  const row = db.prepare(`SELECT * FROM lead_services WHERE id = ?`).get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  const { guest_paid, commission_paid } = req.body || {};
+  if (guest_paid !== undefined) {
+    const v = guest_paid ? 1 : 0;
+    db.prepare(`UPDATE lead_services SET downpayment_paid = ?, balance_paid = ? WHERE id = ?`).run(v, v, row.id);
+    // keep the lead's own Paid switch in line with its booked services
+    const open = db.prepare(`
+      SELECT COUNT(*) n FROM lead_services
+      WHERE lead_id = ? AND downpayment * (1 - downpayment_paid) + balance * (1 - balance_paid) > 0`).get(row.lead_id).n;
+    db.prepare(`UPDATE leads SET paid = ? WHERE id = ?`).run(open ? 0 : 1, row.lead_id);
+  }
+  if (commission_paid !== undefined) {
+    db.prepare(`UPDATE lead_services SET commission_paid = ? WHERE id = ?`).run(commission_paid ? 1 : 0, row.id);
+  }
+  res.json({ ok: true });
+});
+
+// Leads page header: what needs a reply, what's waiting on the client, what
+// is booked and still to come, and this month's commission.
 app.get('/api/leads/summary', (req, res) => {
   const s = db.prepare(`
     SELECT
-      SUM(l.status IN ('new_lead','new_mail') AND l.archived = 0) AS needs_reply,
-      SUM(l.archived = 1) AS archived,
-      SUM(l.booking_confirmed = 1 AND (l.paid = 0 OR COALESCE(s.owed, 0) > 0)) AS confirmed_unpaid,
-      SUM(CASE WHEN l.booking_confirmed = 0 THEN 0
-               WHEN s.lead_id IS NOT NULL THEN s.owed
-               WHEN l.paid = 0 THEN COALESCE(l.price, 0)
-               ELSE 0 END) AS confirmed_owed,
-      SUM(l.booking_confirmed = 1 AND l.service_date >= date('now')) AS upcoming,
+      SUM(l.status IN ('new_lead','new_mail') AND l.archived = 0 AND l.booking_confirmed = 0) AS new_leads,
+      SUM(l.status = 'responded' AND l.archived = 0 AND l.booking_confirmed = 0) AS responded,
+      SUM(l.archived = 1 AND l.booking_confirmed = 0) AS archived,
       SUM(l.booking_confirmed = 1 AND l.status = 'new_mail') AS confirmed_new_mail,
       COUNT(*) AS total
-    FROM leads l
-    LEFT JOIN (
-      SELECT lead_id,
-             SUM(downpayment * (1 - downpayment_paid) + balance * (1 - balance_paid)) AS owed
-      FROM lead_services GROUP BY lead_id
-    ) s ON s.lead_id = l.id`).get();
-  res.json(s);
+    FROM leads l`).get();
+
+  const today = arubaToday();
+  const month = today.slice(0, 7);
+  const rows = bookingRows();
+  const upcoming = rows.filter((r) => !r.date || r.date >= today);
+  const thisMonth = rows.filter((r) => r.date && r.date.startsWith(month));
+  res.json({
+    ...s,
+    upcoming_count: upcoming.length,
+    upcoming_value: sum(upcoming, 'price'),
+    commission_month: sum(thisMonth, 'commission'),
+    commission_month_received: sum(thisMonth.filter((r) => r.commission_paid), 'commission'),
+    month
+  });
 });
 
 function getLeadFull(id) {
@@ -299,13 +401,19 @@ app.patch('/api/leads/:id', async (req, res) => {
   if (Array.isArray(services)) {
     db.prepare(`DELETE FROM lead_services WHERE lead_id = ?`).run(id);
     const ins = db.prepare(`
-      INSERT INTO lead_services (lead_id, name, downpayment, downpayment_paid, balance, balance_paid)
-      VALUES (?, ?, ?, ?, ?, ?)`);
+      INSERT INTO lead_services (lead_id, name, downpayment, downpayment_paid, balance, balance_paid,
+        service_date, info, people, commission, commission_paid, provider, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const txt = (v, n) => String(v ?? '').trim().slice(0, n);
     for (const s of services) {
-      if (!s || (!s.name && !s.downpayment && !s.balance)) continue;
-      ins.run(id, String(s.name || '').slice(0, 200),
+      if (!s || (!s.name && !s.downpayment && !s.balance && !s.commission)) continue;
+      ins.run(id, txt(s.name, 200),
               Number(s.downpayment) || 0, s.downpayment_paid ? 1 : 0,
-              Number(s.balance) || 0, s.balance_paid ? 1 : 0);
+              Number(s.balance) || 0, s.balance_paid ? 1 : 0,
+              /^\d{4}-\d{2}-\d{2}$/.test(s.service_date || '') ? s.service_date : null,
+              txt(s.info, 200), txt(s.people, 100),
+              Number(s.commission) || 0, s.commission_paid ? 1 : 0,
+              txt(s.provider, 200), txt(s.notes, 1000));
     }
   }
   touchLead(id);

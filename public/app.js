@@ -328,9 +328,9 @@ function showView(name) {
   currentView = name;
   document.querySelectorAll('.view').forEach((v) => v.classList.add('hidden'));
   $('#view-' + name).classList.remove('hidden');
-  // The calendar gets the full window width; every other view keeps the
-  // narrower reading column.
-  document.querySelector('main').classList.toggle('wide', name === 'calendar');
+  // The calendar and the bookings table get the full window width; every
+  // other view keeps the narrower reading column.
+  document.querySelector('main').classList.toggle('wide', name === 'calendar' || name === 'bookings');
   document.querySelectorAll('.nav-btn').forEach((b) =>
     b.classList.toggle('active', b.dataset.view === name));
   const inOtherMenu = name === 'clients' || name === 'services';
@@ -340,6 +340,7 @@ function showView(name) {
 
   if (name === 'leads') loadLeads();
   if (name === 'confirmed') loadConfirmed();
+  if (name === 'bookings') loadBookings();
   if (name === 'calendar') renderCalendar();
   if (name === 'payments') loadPayments();
   if (name === 'clients') loadClients();
@@ -409,34 +410,65 @@ function bindLeadCards(container) {
 
 let leadTimer;
 let showArchived = false;
+// which half of the pipeline is showing — remembered between visits
+let leadGroup = (() => { try { return localStorage.getItem('aqualux_lead_group') || 'new'; } catch { return 'new'; } })();
+const monthName = (ym) => new Date(ym + '-15T12:00:00').toLocaleDateString('en-US', { month: 'long' });
+
 async function loadLeads() {
   const params = new URLSearchParams();
   if ($('#lead-search').value) params.set('q', $('#lead-search').value);
   const sort = $('#lead-sort').value;
   if (sort && sort !== 'date') params.set('sort', sort);
   if (showArchived) params.set('archived', '1');
+  // a search looks through both halves so nobody gets "lost" in the other tab
+  else if (!$('#lead-search').value) params.set('group', leadGroup);
   $('#archived-banner').classList.toggle('hidden', !showArchived);
+  $('#lead-tabs').classList.toggle('hidden', showArchived || !!$('#lead-search').value);
   const [summary, rows] = await Promise.all([
     api('/leads/summary'),
     api('/leads' + (params.size ? '?' + params : ''))
   ]);
+  const commissionLabel = `Commission in ${monthName(summary.month)}` +
+    (summary.commission_month > 0 && summary.commission_month_received < summary.commission_month
+      ? ` · ${money(summary.commission_month_received)} received` : '');
   $('#stat-grid').innerHTML = `
-    <div class="stat"><div class="num green">${summary.needs_reply || 0}</div><div class="label">Waiting on your reply</div></div>
-    <div class="stat"><div class="num amber">${summary.confirmed_unpaid || 0}</div><div class="label">Confirmed but unpaid${
-      summary.confirmed_owed > 0 ? ` · <b>${money(summary.confirmed_owed)}</b> still due` : ''}</div></div>
-    <div class="stat"><div class="num">${summary.upcoming || 0}</div><div class="label">Upcoming bookings</div></div>
+    <button class="stat stat-link" data-go="new"><div class="num green">${summary.new_leads || 0}</div><div class="label">New leads</div></button>
+    <button class="stat stat-link" data-go="responded"><div class="num red">${summary.responded || 0}</div><div class="label">Responded</div></button>
+    <button class="stat stat-link" data-go="confirmed"><div class="num">${summary.upcoming_count || 0}</div>
+      <div class="label">Confirmed bookings to come · <b>${money(summary.upcoming_value)}</b></div></button>
+    <button class="stat stat-link" data-go="bookings"><div class="num green">${money(summary.commission_month)}</div>
+      <div class="label">${commissionLabel}</div></button>
     <div class="stat"><div class="num">${summary.total || 0}</div><div class="label">Total leads</div></div>`;
+  $('#stat-grid').querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => {
+    const go = b.dataset.go;
+    if (go === 'new' || go === 'responded') { setLeadGroup(go); return; }
+    if (go === 'bookings') bookingPeriod = 'this-month';
+    showView(go);
+  }));
   updateConfirmedDot(summary);
+  $('#tab-count-new').textContent = summary.new_leads || 0;
+  $('#tab-count-responded').textContent = summary.responded || 0;
+  document.querySelectorAll('.lead-tab').forEach((t) => t.classList.toggle('active', t.dataset.group === leadGroup));
   $('#btn-archived').textContent = `🗄️ Archived${summary.archived ? ` (${summary.archived})` : ''}`;
   $('#btn-archived').classList.toggle('hidden', showArchived);
   const emptyMsg = showArchived ? 'Nothing archived.'
     : $('#lead-search').value ? 'No leads match that search.'
-    : 'No leads yet. Connect Gmail in Settings — new emails will appear here automatically.';
+    : leadGroup === 'new' ? 'All caught up — no leads waiting on a reply. 🎉'
+    : 'No leads waiting on the client right now.';
   $('#lead-list').innerHTML = rows.length
     ? rows.map(leadCard).join('')
     : `<div class="empty">${emptyMsg}</div>`;
   bindLeadCards('#lead-list');
 }
+
+function setLeadGroup(group) {
+  leadGroup = group;
+  try { localStorage.setItem('aqualux_lead_group', group); } catch { /* private mode */ }
+  showArchived = false;
+  loadLeads();
+}
+document.querySelectorAll('.lead-tab').forEach((t) =>
+  t.addEventListener('click', () => setLeadGroup(t.dataset.group)));
 
 $('#btn-archived').addEventListener('click', () => { showArchived = true; loadLeads(); });
 $('#btn-archived-back').addEventListener('click', () => { showArchived = false; loadLeads(); });
@@ -486,6 +518,111 @@ async function loadConfirmed() {
     : `<div class="empty">No confirmed bookings yet. Open a lead and switch on “Booking confirmed”.</div>`;
   bindLeadCards('#confirmed-list');
 }
+
+/* ----------------------------------------------------------- bookings --- */
+// The old bookings spreadsheet, live: one line per booked service.
+let bookingPeriod = (() => { try { return localStorage.getItem('aqualux_bk_period') || 'this-month'; } catch { return 'this-month'; } })();
+
+function periodRange(period) {
+  const now = new Date(), y = now.getFullYear(), m = now.getMonth();
+  const day = (yy, mm, dd) => ymd(new Date(yy, mm, dd));
+  switch (period) {
+    case 'this-month': return { from: day(y, m, 1), to: day(y, m + 1, 0), label: now.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) };
+    case 'last-month': return { from: day(y, m - 1, 1), to: day(y, m, 0), label: new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) };
+    case 'this-year': return { from: `${y}-01-01`, to: `${y}-12-31`, label: String(y) };
+    case 'last-year': return { from: `${y - 1}-01-01`, to: `${y - 1}-12-31`, label: String(y - 1) };
+    case 'upcoming': return { period: 'upcoming', label: 'still to come' };
+    case 'past': return { period: 'past', label: 'already happened' };
+    default: return { label: 'all time' };
+  }
+}
+
+function yesNo(state, field, id, title) {
+  const label = state === 'yes' ? 'Yes' : state === 'partial' ? 'Part' : 'No';
+  return id
+    ? `<button class="yn yn-${state}" data-bk="${id}" data-field="${field}" data-on="${state === 'yes' ? 0 : 1}" title="${title}">${label}</button>`
+    : `<span class="yn yn-${state}">${label}</span>`;
+}
+
+async function loadBookings() {
+  $('#bk-period').value = bookingPeriod;
+  const r = periodRange(bookingPeriod);
+  const qs = new URLSearchParams(Object.entries({ from: r.from, to: r.to, period: r.period }).filter(([, v]) => v));
+  const data = await api('/bookings?' + qs);
+
+  // service filter: keep the choice, list what's in this period
+  const svcSel = $('#bk-service');
+  const chosen = svcSel.value;
+  svcSel.innerHTML = `<option value="">All services</option>` +
+    data.by_service.map((g) => `<option value="${esc(g.service)}">${esc(g.service)} (${g.count})</option>`).join('');
+  if (data.by_service.some((g) => g.service === chosen)) svcSel.value = chosen;
+
+  let rows = data.rows;
+  if (svcSel.value) rows = rows.filter((x) => (x.service || '(no service)') === svcSel.value);
+  if ($('#bk-open-only').checked) rows = rows.filter((x) => x.owed > 0 || !x.commission_paid || x.needs_details);
+  const t = (k) => rows.reduce((a, x) => a + (Number(x[k]) || 0), 0);
+  const commIn = rows.filter((x) => x.commission_paid).reduce((a, x) => a + x.commission, 0);
+
+  $('#bk-stats').innerHTML = `
+    <div class="stat"><div class="num">${rows.length}</div><div class="label">Bookings · ${esc(r.label)}</div></div>
+    <div class="stat"><div class="num">${money(t('price'))}</div><div class="label">Total booking value</div></div>
+    <div class="stat"><div class="num green">${money(t('commission'))}</div><div class="label">Our commission</div></div>
+    <div class="stat"><div class="num ${t('commission') - commIn > 0 ? 'amber' : ''}">${money(t('commission') - commIn)}</div><div class="label">Commission still to receive</div></div>
+    <div class="stat"><div class="num ${t('owed') > 0 ? 'amber' : ''}">${money(t('owed'))}</div><div class="label">Guests still owe</div></div>`;
+
+  const missing = rows.filter((x) => x.needs_details || x.missing_commission).length;
+  $('#bk-needs').classList.toggle('hidden', !missing);
+  $('#bk-needs').innerHTML = `⚠️ ${missing} booking${missing > 1 ? 's have' : ' has'} no commission filled in yet — marked <b>Fill in</b> below. Tap one to add it.`;
+
+  const today = ymd(new Date());
+  $('#bk-table').innerHTML = rows.length ? `
+    <thead><tr>
+      <th>Name</th><th>Date</th><th>Service</th><th>Info</th><th>People</th>
+      <th class="r">Price</th><th class="r">Commission</th><th>Guest paid</th><th>Commission paid</th><th>Notes</th>
+    </tr></thead>
+    <tbody>${rows.map((x) => `
+      <tr data-lead="${x.lead_id}" class="${x.date && x.date < today ? 'past' : ''}">
+        <td class="bk-name">${esc(x.client_name)}</td>
+        <td class="nowrap bk-date">${x.date ? new Date(x.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' }) : '—'}</td>
+        <td class="bk-svc">${esc(x.service || '—')}</td>
+        <td class="bk-info">${esc(x.info || '')}</td>
+        <td class="bk-people" data-label="People">${esc(x.people || '')}</td>
+        <td class="r bk-price" data-label="Price">${x.price ? money(x.price) : ''}</td>
+        <td class="r bk-comm" data-label="Commission">${x.needs_details || x.missing_commission ? '<span class="fill-in">Fill in</span>' : money(x.commission)}</td>
+        <td class="bk-gp" data-label="Guest paid">${yesNo(x.guest_paid, 'guest_paid', x.booking_id, x.owed > 0 ? `${money(x.owed)} still to pay — tap to mark paid in full` : 'Tap to mark as not paid')}</td>
+        <td class="bk-cp" data-label="Commission paid">${x.needs_details ? '' : yesNo(x.commission_paid ? 'yes' : 'no', 'commission_paid', x.booking_id, 'Tap to change')}</td>
+        <td class="bk-notes">${esc([x.provider, x.notes].filter(Boolean).join(' — '))}</td>
+      </tr>`).join('')}</tbody>
+    <tfoot><tr>
+      <td colspan="5">Total · ${rows.length} booking${rows.length === 1 ? '' : 's'}</td>
+      <td class="r">${money(t('price'))}</td><td class="r">${money(t('commission'))}</td><td colspan="3"></td>
+    </tr></tfoot>`
+    : `<tbody><tr><td class="empty">No confirmed bookings ${esc(r.label === 'all time' ? 'yet' : 'for ' + r.label)}.</td></tr></tbody>`;
+
+  const groups = data.by_service.filter((g) => !svcSel.value || g.service === svcSel.value);
+  $('#bk-by-service').innerHTML = groups.length ? `
+    <thead><tr><th>Service</th><th class="r">Bookings</th><th class="r">Total price</th><th class="r">Commission</th></tr></thead>
+    <tbody>${groups.map((g) => `
+      <tr><td>${esc(g.service)}</td><td class="r">${g.count}</td><td class="r">${money(g.price)}</td><td class="r">${money(g.commission)}</td></tr>`).join('')}</tbody>`
+    : '';
+
+  $('#bk-table').querySelectorAll('tr[data-lead]').forEach((tr) =>
+    tr.addEventListener('click', () => openLead(tr.dataset.lead)));
+  $('#bk-table').querySelectorAll('button[data-bk]').forEach((b) => b.addEventListener('click', async (e) => {
+    e.stopPropagation(); // a tap on Yes/No shouldn't also open the lead
+    b.disabled = true;
+    await api('/bookings/' + b.dataset.bk, { method: 'PATCH', body: JSON.stringify({ [b.dataset.field]: b.dataset.on === '1' }) });
+    loadBookings();
+  }));
+}
+
+$('#bk-period').addEventListener('change', () => {
+  bookingPeriod = $('#bk-period').value;
+  try { localStorage.setItem('aqualux_bk_period', bookingPeriod); } catch { /* private mode */ }
+  loadBookings();
+});
+$('#bk-service').addEventListener('change', loadBookings);
+$('#bk-open-only').addEventListener('change', loadBookings);
 
 /* ------------------------------------------------------------ calendar --- */
 let calYear, calMonth; // calMonth: 0-11
@@ -859,6 +996,7 @@ async function runCatalogSync(btn, idleLabel) {
 $('#btn-reimport-catalog-top').addEventListener('click', () => runCatalogSync($('#btn-reimport-catalog-top'), '⟳ Sync starter catalog'));
 
 async function loadServices() {
+  serviceBookPromise = null; // the booking suggestions re-read any edits made here
   const q = $('#service-search').value;
   allServices = await api('/services' + (q ? '?q=' + encodeURIComponent(q) : ''));
 
@@ -1064,6 +1202,37 @@ function fillTemplate(body, l) {
   return body.replace(/\{(\w+)\}/g, (m, key) => (key in values ? values[key] : m));
 }
 
+/**
+ * The Services book, fetched once per page load: service names and
+ * companies for the booking suggestions, and each service's commission
+ * (if it's written as a percentage, e.g. "15%").
+ */
+let serviceBookPromise = null;
+function serviceBook(refresh = false) {
+  if (!serviceBookPromise || refresh) {
+    serviceBookPromise = api('/services').catch(() => []).then((list) => {
+      const names = new Set(), providers = new Set();
+      for (const s of list) {
+        if (s.wix_form_name) names.add(s.wix_form_name);
+        if (s.service_name) names.add(s.service_name);
+        if (s.company) providers.add(s.company);
+      }
+      const opts = (set) => [...set].sort().map((v) => `<option value="${esc(v)}">`).join('');
+      $('#svc-type-list').innerHTML = opts(names);
+      $('#provider-list').innerHTML = opts(providers);
+      return list;
+    });
+  }
+  return serviceBookPromise;
+}
+function commissionPercent(book, serviceName) {
+  const n = String(serviceName || '').trim().toLowerCase();
+  if (!n) return 0;
+  const hit = book.find((s) => [s.wix_form_name, s.service_name].some((v) => (v || '').toLowerCase() === n));
+  const m = String(hit?.commission || '').match(/(\d+(?:\.\d+)?)\s*%/);
+  return m ? Number(m[1]) : 0;
+}
+
 function closeDrawer() {
   $('#drawer').classList.add('hidden');
   $('#drawer-backdrop').classList.add('hidden');
@@ -1127,10 +1296,10 @@ async function openLead(id) {
     </div>
 
     <div class="panel">
-      <h3>Services &amp; payments</h3>
-      <div class="svc-head"><span>Service</span><span>Down payment</span><span></span><span>Balance</span><span></span><span></span></div>
+      <h3>Bookings &amp; commission</h3>
+      <p class="reply-hint" style="margin:-4px 0 10px">One line per service booked — this is what fills the <b>Bookings</b> page once the booking is confirmed.</p>
       <div id="svc-rows"></div>
-      <button class="btn btn-sm" id="svc-add">+ Add service</button>
+      <button class="btn btn-sm" id="svc-add">+ Add another service</button>
       <div class="svc-totals" id="svc-totals"></div>
     </div>
 
@@ -1185,45 +1354,120 @@ async function openLead(id) {
     refreshCurrentView();
   });
 
-  // --- services editor ---
+  // --- bookings editor: one card per booked service, the columns of the
+  // old bookings spreadsheet. Price is entered as a total; the balance is
+  // whatever's left after the deposit. ---
   const svcRows = $('#svc-rows');
+  const book = await serviceBook();
+  const num = (v) => Number(v) || 0;
   function addServiceRow(s = {}) {
+    const price = num(s.downpayment) + num(s.balance);
     const row = document.createElement('div');
-    row.className = 'svc-row';
+    row.className = 'bk-edit';
     row.innerHTML = `
-      <input class="svc-name" placeholder="e.g. Boat day" value="${esc(s.name || '')}">
-      <input class="svc-down" type="number" min="0" step="0.01" placeholder="0" value="${s.downpayment || ''}">
-      <label class="mini" title="Down payment received"><input type="checkbox" class="svc-down-paid" ${s.downpayment_paid ? 'checked' : ''}>paid</label>
-      <input class="svc-bal" type="number" min="0" step="0.01" placeholder="0" value="${s.balance || ''}">
-      <label class="mini" title="Balance received"><input type="checkbox" class="svc-bal-paid" ${s.balance_paid ? 'checked' : ''}>paid</label>
-      <button class="btn btn-sm svc-del" title="Remove">×</button>`;
+      <div class="bk-edit-grid">
+        <label class="bk-f-service">Service<input class="svc-name" list="svc-type-list" placeholder="e.g. Car Rental" value="${esc(s.name || '')}"></label>
+        <label>Date<input class="svc-date" type="date" value="${s.service_date || ''}"></label>
+        <label>Info<input class="svc-info" placeholder="e.g. 3 day, Sunset tour" value="${esc(s.info || '')}"></label>
+        <label>People / type<input class="svc-people" placeholder="e.g. 6, VAN, SEDAN" value="${esc(s.people || '')}"></label>
+      </div>
+      <div class="bk-edit-grid bk-money">
+        <label>Price (total)<input class="svc-price" type="number" min="0" step="0.01" placeholder="0" value="${price || ''}"></label>
+        <label>Deposit<input class="svc-down" type="number" min="0" step="0.01" placeholder="0" value="${num(s.downpayment) || ''}">
+          <span class="mini-check"><input type="checkbox" class="svc-down-paid" ${s.downpayment_paid ? 'checked' : ''}> received</span></label>
+        <label>Rest to pay<div class="svc-bal-show">—</div>
+          <span class="mini-check"><input type="checkbox" class="svc-bal-paid" ${s.balance_paid ? 'checked' : ''}> received</span></label>
+        <label>Our commission<input class="svc-comm" type="number" min="0" step="0.01" placeholder="0" value="${num(s.commission) || ''}">
+          <span class="mini-check"><input type="checkbox" class="svc-comm-paid" ${s.commission_paid ? 'checked' : ''}> received</span>
+          <span class="svc-comm-pct"></span></label>
+      </div>
+      <div class="bk-edit-grid bk-last">
+        <label>Provider / company<input class="svc-provider" list="provider-list" placeholder="e.g. Mama Auto" value="${esc(s.provider || '')}"></label>
+        <label class="bk-f-notes">Notes<input class="svc-notes" placeholder="e.g. paying $30 cleaning fee" value="${esc(s.notes || '')}"></label>
+        <button class="btn btn-sm btn-danger svc-del" title="Remove this service">Remove</button>
+      </div>`;
     row.querySelector('.svc-del').addEventListener('click', () => { row.remove(); updateTotals(); });
-    row.querySelectorAll('input').forEach((i) => i.addEventListener('input', updateTotals));
+    row.querySelectorAll('input').forEach((i) => i.addEventListener('input', () => {
+      // commission % from the Services book (e.g. "15%"), filled in only
+      // while the commission box is still empty — never over a typed amount
+      if (i.matches('.svc-price, .svc-name')) autoCommission(row);
+      updateTotals();
+    }));
+    row.querySelectorAll('.svc-down-paid, .svc-bal-paid').forEach((c) => c.addEventListener('change', syncPaidSwitch));
+    row.querySelector('.svc-comm').addEventListener('input', (e) => { e.target.dataset.auto = ''; });
     svcRows.appendChild(row);
+    updateRow(row);
+  }
+  function autoCommission(row) {
+    const box = row.querySelector('.svc-comm');
+    if (box.value && box.dataset.auto !== '1') return;
+    const pct = commissionPercent(book, row.querySelector('.svc-name').value);
+    const price = num(row.querySelector('.svc-price').value);
+    if (pct && price) { box.value = (Math.round(price * pct) / 100).toFixed(2); box.dataset.auto = '1'; }
+  }
+  function updateRow(row) {
+    const price = num(row.querySelector('.svc-price').value);
+    const down = num(row.querySelector('.svc-down').value);
+    row.querySelector('.svc-bal-show').textContent = price ? money(Math.max(0, price - down)) : '—';
+    const comm = num(row.querySelector('.svc-comm').value);
+    row.querySelector('.svc-comm-pct').textContent = price && comm ? `${Math.round(comm / price * 1000) / 10}% of price` : '';
   }
   function collectServices() {
-    return [...svcRows.querySelectorAll('.svc-row')].map((r) => ({
-      name: r.querySelector('.svc-name').value.trim(),
-      downpayment: Number(r.querySelector('.svc-down').value) || 0,
-      downpayment_paid: r.querySelector('.svc-down-paid').checked,
-      balance: Number(r.querySelector('.svc-bal').value) || 0,
-      balance_paid: r.querySelector('.svc-bal-paid').checked
-    })).filter((s) => s.name || s.downpayment || s.balance);
+    return [...svcRows.querySelectorAll('.bk-edit')].map((r) => {
+      const price = num(r.querySelector('.svc-price').value);
+      const down = Math.min(num(r.querySelector('.svc-down').value), price || Infinity);
+      return {
+        name: r.querySelector('.svc-name').value.trim(),
+        service_date: r.querySelector('.svc-date').value || null,
+        info: r.querySelector('.svc-info').value,
+        people: r.querySelector('.svc-people').value,
+        downpayment: down,
+        downpayment_paid: r.querySelector('.svc-down-paid').checked,
+        balance: Math.max(0, price - down),
+        balance_paid: r.querySelector('.svc-bal-paid').checked,
+        commission: num(r.querySelector('.svc-comm').value),
+        commission_paid: r.querySelector('.svc-comm-paid').checked,
+        provider: r.querySelector('.svc-provider').value,
+        notes: r.querySelector('.svc-notes').value
+      };
+    }).filter((s) => s.name || s.downpayment || s.balance || s.commission);
   }
+  const owedOf = (s) => (s.downpayment_paid ? 0 : s.downpayment) + (s.balance_paid ? 0 : s.balance);
   function updateTotals() {
+    svcRows.querySelectorAll('.bk-edit').forEach(updateRow);
     const list = collectServices();
     const total = list.reduce((a, s) => a + s.downpayment + s.balance, 0);
-    const received = list.reduce((a, s) =>
-      a + (s.downpayment_paid ? s.downpayment : 0) + (s.balance_paid ? s.balance : 0), 0);
-    $('#svc-totals').innerHTML = total
-      ? `Total <b>${money(total)}</b> · Received <b class="ok">${money(received)}</b> · Still due <b class="${total - received > 0 ? 'due' : 'ok'}">${money(total - received)}</b>`
+    const due = list.reduce((a, s) => a + owedOf(s), 0);
+    const comm = list.reduce((a, s) => a + s.commission, 0);
+    $('#svc-totals').innerHTML = total || comm
+      ? `Total <b>${money(total)}</b> · Received <b class="ok">${money(total - due)}</b> · Still due <b class="${due > 0 ? 'due' : 'ok'}">${money(due)}</b>` +
+        ` · Our commission <b>${money(comm)}</b>`
       : '';
   }
+  // ticking every payment received switches the lead to Paid (and back)
+  function syncPaidSwitch() {
+    const list = collectServices().filter((s) => s.downpayment + s.balance > 0);
+    if (!list.length) return;
+    $('#d-paid').checked = list.every((s) => owedOf(s) === 0);
+  }
   if (l.services.length) l.services.forEach(addServiceRow);
-  else if (l.price > 0) addServiceRow({ name: l.service, balance: l.price });
-  else addServiceRow();
+  else addServiceRow({ name: l.service, balance: l.price || 0, balance_paid: l.paid, service_date: l.service_date,
+                       people: l.party_size ? String(l.party_size) : '' });
   updateTotals();
-  $('#svc-add').addEventListener('click', () => addServiceRow());
+  $('#svc-add').addEventListener('click', () => addServiceRow({ service_date: $('#d-date').value }));
+  // Booking lines follow the lead's own date and service when those change,
+  // unless a line was deliberately given something different.
+  function followLead(inputSel, rowSel) {
+    let prev = $(inputSel).value;
+    $(inputSel).addEventListener('input', () => {
+      const now = $(inputSel).value;
+      svcRows.querySelectorAll(rowSel).forEach((box) => { if (box.value === prev || !box.value) box.value = now; });
+      prev = now;
+      updateTotals();
+    });
+  }
+  followLead('#d-date', '.svc-date');
+  followLead('#d-service', '.svc-name');
 
   $('#d-save').addEventListener('click', async () => {
     $('#d-save-status').textContent = 'Saving…';

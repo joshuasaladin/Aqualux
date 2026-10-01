@@ -224,6 +224,16 @@ ensureColumn('leads', 'merged_count', 'merged_count INTEGER NOT NULL DEFAULT 1')
 ensureColumn('leads', 'gcal_event_id', 'gcal_event_id TEXT');
 ensureColumn('leads', 'service_time', 'service_time TEXT');
 ensureColumn('leads', 'draft_reply', `draft_reply TEXT DEFAULT ''`);
+// One lead_services row = one booked service — a line of the old bookings
+// spreadsheet: date, info ("3 day"), people ("VAN" / "6"), price
+// (= downpayment + balance), commission, and who has paid what.
+ensureColumn('lead_services', 'service_date', 'service_date TEXT');
+ensureColumn('lead_services', 'info', `info TEXT DEFAULT ''`);
+ensureColumn('lead_services', 'people', `people TEXT DEFAULT ''`);
+ensureColumn('lead_services', 'commission', 'commission REAL NOT NULL DEFAULT 0');
+ensureColumn('lead_services', 'commission_paid', 'commission_paid INTEGER NOT NULL DEFAULT 0');
+ensureColumn('lead_services', 'provider', `provider TEXT DEFAULT ''`);
+ensureColumn('lead_services', 'notes', `notes TEXT DEFAULT ''`);
 ensureColumn('leads', 'reply_cc', `reply_cc TEXT DEFAULT ''`);
 ensureColumn('leads', 'archived', 'archived INTEGER NOT NULL DEFAULT 0');
 ensureColumn('messages', 'from_name', `from_name TEXT DEFAULT ''`);

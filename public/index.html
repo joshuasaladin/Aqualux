@@ -31,6 +31,7 @@
     <nav id="main-nav">
       <button class="nav-btn active" data-view="leads">Leads</button>
       <button class="nav-btn" data-view="confirmed">Confirmed <span id="confirmed-dot" class="dot dot-on hidden" title="Unanswered email from a confirmed client"></span></button>
+      <button class="nav-btn" data-view="bookings">Bookings</button>
       <button class="nav-btn" data-view="calendar">Calendar</button>
       <button class="nav-btn" data-view="payments">Payments</button>
       <div class="nav-dropdown" id="other-dropdown">
@@ -57,6 +58,10 @@
         <button class="btn" id="btn-sync">⟳ Sync Gmail</button>
         <button class="btn" id="btn-archived" title="Leads you've archived">🗄️ Archived</button>
       </div>
+      <div class="lead-tabs" id="lead-tabs">
+        <button class="lead-tab" data-group="new">New leads <span class="lead-tab-count" id="tab-count-new"></span></button>
+        <button class="lead-tab" data-group="responded">Responded <span class="lead-tab-count" id="tab-count-responded"></span></button>
+      </div>
       <div id="archived-banner" class="archived-banner hidden">
         Showing <b>archived</b> leads — they come back to the list on their own if the person writes again.
         <button class="btn btn-sm" id="btn-archived-back">← Back to active leads</button>
@@ -68,6 +73,32 @@
     <section id="view-confirmed" class="view hidden">
       <h2>Confirmed bookings</h2>
       <div id="confirmed-list" class="card-list"></div>
+    </section>
+
+    <!-- ============================ BOOKINGS ============================= -->
+    <!-- The old bookings spreadsheet: every booked service, what it's worth
+         and what we earn on it. Separate from Payments, which only lists
+         money that came in by Zelle/Venmo email. -->
+    <section id="view-bookings" class="view hidden">
+      <div class="stat-grid" id="bk-stats"></div>
+      <div class="filters">
+        <select id="bk-period" title="Which bookings">
+          <option value="this-month">This month</option>
+          <option value="upcoming">Upcoming (not happened yet)</option>
+          <option value="last-month">Last month</option>
+          <option value="this-year">This year</option>
+          <option value="last-year">Last year</option>
+          <option value="past">All past bookings</option>
+          <option value="all">All time</option>
+        </select>
+        <select id="bk-service" title="Service"><option value="">All services</option></select>
+        <label class="bk-check"><input type="checkbox" id="bk-open-only"> Only open items (guest owes or commission not received)</label>
+      </div>
+      <div id="bk-needs" class="bk-needs hidden"></div>
+      <div class="bk-table-wrap"><table class="bk-table" id="bk-table"></table></div>
+      <h2>Totals per service</h2>
+      <div class="bk-table-wrap bk-narrow"><table class="bk-table bk-by-service" id="bk-by-service"></table></div>
+      <p class="cal-hint">Every service on a confirmed booking shows here. Fill in the details under <b>Bookings &amp; commission</b> in the lead. Tap <b>Yes / No</b> to mark a guest or commission as paid.</p>
     </section>
 
     <!-- ============================ CALENDAR ============================= -->
@@ -261,6 +292,8 @@
 </div>
 
 <datalist id="category-list"></datalist>
+<datalist id="svc-type-list"></datalist>
+<datalist id="provider-list"></datalist>
 <datalist id="booking-method-list">
   <option>WhatsApp</option><option>Email</option><option>Phone</option>
   <option>Fare Harbour</option><option>Ticket book + WhatsApp</option>
