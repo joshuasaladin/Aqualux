@@ -116,7 +116,7 @@ export async function handleCallback(code, state, redirectUri) {
 
 export function disconnect() {
   for (const k of ['gmail_tokens', 'gmail_email', 'gmail_last_sync', 'gmail_last_sync_error',
-                    'gmail_sync_since', 'gmail_granted_scope']) {
+                    'gmail_sync_since', 'gmail_granted_scope', 'gmail_history_id']) {
     deleteSetting(k);
   }
 }
@@ -144,11 +144,28 @@ export async function accessToken() {
   return merged.access_token;
 }
 
+/** An Error that keeps Google's HTTP status and reason, so callers can tell a rate limit from anything else. */
+function gmailError(res, data) {
+  const err = new Error(data?.error?.message || `Gmail API error ${res.status}`);
+  err.status = res.status;
+  err.reason = data?.error?.errors?.[0]?.reason || '';
+  return err;
+}
+
+/** Google refused because this account made too many requests too fast. */
+export function isRateLimited(err) {
+  return err?.status === 429 ||
+    /rateLimitExceeded|userRateLimitExceeded|quotaExceeded/i.test(err?.reason || '') ||
+    /quota exceeded|rate limit/i.test(err?.message || '');
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 async function apiGet(path) {
   const token = await accessToken();
   const res = await fetch(API + path, { headers: { Authorization: `Bearer ${token}` } });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || `Gmail API error ${res.status}`);
+  if (!res.ok) throw gmailError(res, data);
   return data;
 }
 
@@ -160,7 +177,7 @@ async function apiPost(path, body) {
     body: JSON.stringify(body)
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || `Gmail API error ${res.status}`);
+  if (!res.ok) throw gmailError(res, data);
   return data;
 }
 
@@ -483,6 +500,145 @@ export function handleFormSubmission(form, msg) {
 
 // --------------------------------------------------------------- sync -----
 let syncing = false;
+let syncPausedUntil = 0;
+
+/** Hold off background syncs for a while (after Gmail says "slow down"). */
+export function pauseSyncFor(ms) {
+  syncPausedUntil = Math.max(syncPausedUntil, Date.now() + ms);
+}
+
+/**
+ * A thread that isn't a lead yet: decide what it is (website form, payment,
+ * promo, calendar RSVP, or a real inquiry) and file it accordingly.
+ */
+function handleNewThread(threadId, thread, myEmail, counts) {
+  const first = thread.messages?.[0];
+  if (!first) return;
+  const from = parseFrom(header(first, 'From'));
+  if (!from.email || from.email === myEmail) { markThreadProcessed(threadId); return; }
+
+  const bodyText = extractText(first.payload) || first.snippet || '';
+  const subject = header(first, 'Subject') || '(no subject)';
+
+  // Website form notification? Lead belongs to the visitor, not the form service.
+  const form = parseFormSubmission(from, bodyText);
+  if (form) {
+    handleFormSubmission(form, first);
+    markThreadProcessed(threadId);
+    counts.created++;
+    return;
+  }
+
+  // Emails from payment services NEVER become leads: money-received
+  // notifications go to the Payments tab; everything else from them
+  // (transfer initiated, statements, alerts) is skipped entirely.
+  if (PAYMENT_SENDERS.test(from.email)) {
+    const pay = parsePaymentNotification(from, subject, bodyText);
+    if (pay) {
+      recordPayment(pay, first, subject, bodyText);
+      counts.payments++;
+    }
+    markThreadProcessed(threadId);
+    return;
+  }
+
+  // Bulk / promotional mail is not a lead.
+  if (isBulkMail(first, from)) { markThreadProcessed(threadId); return; }
+
+  // Google Calendar RSVP notifications ("Accepted: ...") are not leads,
+  // even though they arrive from the guest's real address.
+  if (isCalendarNotification(subject, bodyText)) { markThreadProcessed(threadId); return; }
+
+  const client = upsertClient({ name: from.name, email: from.email });
+  const existing = latestLeadForClient(client.id);
+  if (existing) {
+    // Same person writing in again from a new thread -> same lead.
+    registerThread(threadId, existing.id);
+    if (!existing.gmail_thread_id) {
+      db.prepare(`UPDATE OR IGNORE leads SET gmail_thread_id = ? WHERE id = ?`).run(threadId, existing.id);
+    }
+    if (absorbThreadMessages(existing.id, thread, myEmail)) bumpMergedCount(existing.id);
+    counts.updated++;
+    return;
+  }
+  const info = db.prepare(`
+    INSERT INTO leads (client_id, gmail_thread_id, subject, service)
+    VALUES (?, ?, ?, ?)`).run(client.id, threadId, subject, subject);
+  registerThread(threadId, info.lastInsertRowid);
+  absorbThreadMessages(info.lastInsertRowid, thread, myEmail);
+  counts.created++;
+}
+
+/** Bring one Gmail thread up to date: new replies on a lead, or a brand-new inquiry. */
+async function syncThread(threadId, myEmail, counts) {
+  const tracked = db.prepare(`SELECT lead_id FROM lead_threads WHERE thread_id = ?`).get(threadId);
+  if (!tracked && db.prepare(`SELECT 1 FROM processed_threads WHERE thread_id = ?`).get(threadId)) return;
+  let thread;
+  try {
+    thread = await apiGet(`/threads/${threadId}?format=full`);
+  } catch (err) {
+    if (err.status === 404) return; // deleted in Gmail — leave the lead as-is
+    throw err;
+  }
+  if (tracked) {
+    if (absorbThreadMessages(tracked.lead_id, thread, myEmail)) counts.updated++;
+  } else {
+    handleNewThread(threadId, thread, myEmail, counts);
+  }
+}
+
+/**
+ * Which threads got a new message since Gmail's bookmark `startHistoryId` —
+ * one cheap request when nothing happened, instead of re-reading every
+ * conversation. Spam, trash and unsent drafts are ignored.
+ */
+async function changedThreadsSince(startHistoryId) {
+  const threadIds = new Set();
+  let pageToken = '', historyId = startHistoryId;
+  do {
+    const r = await apiGet(`/history?startHistoryId=${encodeURIComponent(startHistoryId)}` +
+      `&historyTypes=messageAdded&maxResults=500${pageToken ? `&pageToken=${pageToken}` : ''}`);
+    for (const h of r.history || []) {
+      for (const { message } of h.messagesAdded || []) {
+        const labels = message.labelIds || [];
+        if (labels.some((l) => l === 'SPAM' || l === 'TRASH' || l === 'DRAFT')) continue;
+        threadIds.add(message.threadId);
+      }
+    }
+    historyId = r.historyId || historyId;
+    pageToken = r.nextPageToken || '';
+  } while (pageToken);
+  return { threadIds: [...threadIds], historyId };
+}
+
+/**
+ * The slow way, used only when there's no bookmark yet (first connect,
+ * "Import last 7 days") or Gmail's history has expired (about a week of
+ * the CRM being offline). Requests are spaced out so even this never
+ * bursts past Gmail's per-second limit.
+ */
+async function fullScan(myEmail, counts) {
+  const since = getSetting('gmail_sync_since') || Math.floor(Date.now() / 1000);
+  const seen = new Set();
+  // Searches ALL mail, not just the inbox, so emails that Gmail filters
+  // auto-label or archive (skip the inbox) are still found.
+  const list = await apiGet(`/threads?q=${encodeURIComponent(`after:${since} -in:spam -in:trash`)}&maxResults=50`);
+  for (const t of list.threads || []) {
+    seen.add(t.id);
+    await syncThread(t.id, myEmail, counts);
+    await sleep(120);
+  }
+  // Leads that went quiet still get one look, for replies you may have sent
+  // from Gmail directly while the CRM couldn't see the history.
+  const tracked = db.prepare(`
+    SELECT lt.thread_id FROM lead_threads lt JOIN leads l ON l.id = lt.lead_id
+    ORDER BY l.updated_at DESC LIMIT 150`).all();
+  for (const { thread_id } of tracked) {
+    if (seen.has(thread_id)) continue;
+    await syncThread(thread_id, myEmail, counts);
+    await sleep(120);
+  }
+}
 
 export async function syncNow() {
   if (syncing) return { skipped: true };
@@ -490,100 +646,27 @@ export async function syncNow() {
   syncing = true;
   try {
     const myEmail = (getSetting('gmail_email') || '').toLowerCase();
-    const since = getSetting('gmail_sync_since') || Math.floor(Date.now() / 1000);
-    let created = 0, updated = 0, payments = 0;
+    const counts = { created: 0, updated: 0, payments: 0 };
 
-    // 1. New threads -> new leads (or merged into the sender's existing
-    //    lead). Searches ALL mail, not just the inbox, so emails that Gmail
-    //    filters auto-label or archive (skip the inbox) are still found.
-    const list = await apiGet(`/threads?q=${encodeURIComponent(`after:${since} -in:spam -in:trash`)}&maxResults=50`);
-    const refreshed = new Set();
-    for (const t of list.threads || []) {
-      // Gmail lists threads by most recent activity, so an existing lead's
-      // thread showing up here may have a new reply. Read it now — step 2
-      // below only covers the 150 most recently updated leads, and a client
-      // answering a months-old conversation would otherwise be missed.
-      const tracked = db.prepare(`SELECT lead_id FROM lead_threads WHERE thread_id = ?`).get(t.id);
-      if (tracked) {
-        try {
-          const thread = await apiGet(`/threads/${t.id}?format=full`);
-          if (absorbThreadMessages(tracked.lead_id, thread, myEmail)) updated++;
-          refreshed.add(t.id);
-        } catch { /* picked up again on the next sync */ }
-        continue;
-      }
-      if (db.prepare(`SELECT 1 FROM processed_threads WHERE thread_id = ?`).get(t.id)) continue;
-      const thread = await apiGet(`/threads/${t.id}?format=full`);
-      const first = thread.messages?.[0];
-      if (!first) continue;
-      const from = parseFrom(header(first, 'From'));
-      if (!from.email || from.email === myEmail) { markThreadProcessed(t.id); continue; }
-
-      const bodyText = extractText(first.payload) || first.snippet || '';
-      const subject = header(first, 'Subject') || '(no subject)';
-
-      // Website form notification? Lead belongs to the visitor, not the form service.
-      const form = parseFormSubmission(from, bodyText);
-      if (form) {
-        handleFormSubmission(form, first);
-        markThreadProcessed(t.id);
-        created++;
-        continue;
-      }
-
-      // Emails from payment services NEVER become leads: money-received
-      // notifications go to the Payments tab; everything else from them
-      // (transfer initiated, statements, alerts) is skipped entirely.
-      if (PAYMENT_SENDERS.test(from.email)) {
-        const pay = parsePaymentNotification(from, subject, bodyText);
-        if (pay) {
-          recordPayment(pay, first, subject, bodyText);
-          payments++;
-        }
-        markThreadProcessed(t.id);
-        continue;
-      }
-
-      // Bulk / promotional mail is not a lead.
-      if (isBulkMail(first, from)) { markThreadProcessed(t.id); continue; }
-
-      // Google Calendar RSVP notifications ("Accepted: ...") are not leads,
-      // even though they arrive from the guest's real address.
-      if (isCalendarNotification(subject, bodyText)) { markThreadProcessed(t.id); continue; }
-
-      const client = upsertClient({ name: from.name, email: from.email });
-      const existing = latestLeadForClient(client.id);
-      if (existing) {
-        // Same person writing in again from a new thread -> same lead.
-        registerThread(t.id, existing.id);
-        if (!existing.gmail_thread_id) {
-          db.prepare(`UPDATE OR IGNORE leads SET gmail_thread_id = ? WHERE id = ?`).run(t.id, existing.id);
-        }
-        if (absorbThreadMessages(existing.id, thread, myEmail)) bumpMergedCount(existing.id);
-        updated++;
-        continue;
-      }
-      const info = db.prepare(`
-        INSERT INTO leads (client_id, gmail_thread_id, subject, service)
-        VALUES (?, ?, ?, ?)`).run(client.id, t.id, subject, subject);
-      registerThread(t.id, info.lastInsertRowid);
-      absorbThreadMessages(info.lastInsertRowid, thread, myEmail);
-      created++;
-    }
-
-    // 2. Refresh every tracked thread (catches client replies AND your
-    //    replies sent from Gmail directly, so status stays correct).
-    const tracked = db.prepare(`
-      SELECT lt.thread_id, lt.lead_id FROM lead_threads lt
-      JOIN leads l ON l.id = lt.lead_id
-      ORDER BY l.updated_at DESC LIMIT 150`).all();
-    for (const row of tracked) {
-      if (refreshed.has(row.thread_id)) continue; // already read above
+    let changed = null;
+    const bookmark = getSetting('gmail_history_id');
+    if (bookmark) {
       try {
-        const thread = await apiGet(`/threads/${row.thread_id}?format=full`);
-        if (absorbThreadMessages(row.lead_id, thread, myEmail)) updated++;
-      } catch { /* thread deleted in Gmail — leave the lead as-is */ }
+        changed = await changedThreadsSince(bookmark);
+      } catch (err) {
+        if (err.status !== 404) throw err; // 404 = bookmark too old: fall back below
+      }
     }
+    if (changed) {
+      for (const id of changed.threadIds) await syncThread(id, myEmail, counts);
+      setSetting('gmail_history_id', changed.historyId);
+    } else {
+      // Take the bookmark BEFORE scanning so nothing arriving mid-scan is missed.
+      const { historyId } = await apiGet('/profile');
+      await fullScan(myEmail, counts);
+      setSetting('gmail_history_id', historyId);
+    }
+    const { created, updated, payments } = counts;
 
     setSetting('gmail_last_sync', new Date().toISOString());
     setSetting('gmail_last_sync_error', null);
@@ -682,8 +765,26 @@ async function apiSendRaw(rfc822, threadId) {
       body: payload
     });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error?.message || `Gmail API error ${res.status}`);
+  if (!res.ok) throw gmailError(res, data);
   return data;
+}
+
+/**
+ * Send, and if Gmail says "too many requests right now", wait and try again
+ * a couple of times before giving up — the limit is per minute, so a short
+ * pause is usually all it takes.
+ */
+async function apiSendRawWithRetry(rfc822, threadId) {
+  const waits = [3000, 8000];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await apiSendRaw(rfc822, threadId);
+    } catch (err) {
+      if (!isRateLimited(err) || attempt >= waits.length) throw err;
+      pauseSyncFor(60 * 1000); // stop the background sync competing with the send
+      await sleep(waits[attempt]);
+    }
+  }
 }
 
 /** attachments: [{ filename, mimeType, data }] where data is plain base64. */
@@ -823,7 +924,7 @@ export async function sendReply(lead, client, bodyText, attachments = [], cc = [
     rfc822 = headers.join('\r\n') + '\r\n\r\n' + core.content;
   }
 
-  const sent = await apiSendRaw(rfc822, lead.gmail_thread_id || undefined);
+  const sent = await apiSendRawWithRetry(rfc822, lead.gmail_thread_id || undefined);
 
   // Leads created manually or from the website form get a thread on first reply
   if (!lead.gmail_thread_id && sent.threadId) {
@@ -972,8 +1073,13 @@ export async function deleteCalendarEvent(eventId) {
 // ------------------------------------------------------------ polling -----
 export function startPolling(intervalMs = 3 * 60 * 1000) {
   const tick = () => {
-    if (!isConnected()) return;
-    syncNow().catch((err) => console.error('[gmail sync]', err.message));
+    if (!isConnected() || Date.now() < syncPausedUntil) return;
+    syncNow().catch((err) => {
+      console.error('[gmail sync]', err.message);
+      // Gmail asked us to slow down — give the account's allowance a few
+      // minutes to recover so sending replies keeps working.
+      if (isRateLimited(err)) pauseSyncFor(5 * 60 * 1000);
+    });
   };
   setTimeout(tick, 5000);
   setInterval(tick, intervalMs);

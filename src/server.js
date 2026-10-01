@@ -38,6 +38,14 @@ function baseUrl(req) {
 }
 const redirectUri = (req) => baseUrl(req) + '/api/gmail/callback';
 
+// Google's wording for its per-minute request limit is cryptic ("Quota
+// exceeded for quota metric 'Total Query Cost'…") — say what it means.
+function gmailErrorMessage(err, whatToDo) {
+  return gmail.isRateLimited(err)
+    ? `Gmail is limiting how many requests this account can make per minute. ${whatToDo}`
+    : err.message;
+}
+
 // ------------------------------------------------------- public intake ----
 // POST { name, email, phone?, service, details? } — for the website form.
 app.post('/api/intake', (req, res) => {
@@ -99,7 +107,7 @@ app.post('/api/gmail/sync', async (req, res) => {
   try {
     res.json(await gmail.syncNow());
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: gmailErrorMessage(err, 'Wait a minute and sync again.') });
   }
 });
 
@@ -107,9 +115,12 @@ app.post('/api/gmail/import-recent', async (req, res) => {
   try {
     const days = Math.min(Number(req.body?.days) || 7, 30);
     setSetting('gmail_sync_since', Math.floor(Date.now() / 1000) - days * 86400);
+    // looking back is the one case the "what changed since last time"
+    // bookmark can't answer — drop it so this sync does a full search
+    setSetting('gmail_history_id', null);
     res.json(await gmail.syncNow());
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: gmailErrorMessage(err, 'Wait a minute and sync again.') });
   }
 });
 
@@ -349,7 +360,7 @@ app.get('/api/attachments/:id', async (req, res) => {
     });
     res.send(bytes);
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    res.status(502).json({ error: gmailErrorMessage(err, 'Wait a minute and open it again.') });
   }
 });
 
@@ -395,7 +406,8 @@ app.post('/api/leads/:id/reply', async (req, res) => {
       .run(ccList.valid.join(', '), lead.id);
     res.json(getLeadFull(lead.id));
   } catch (err) {
-    res.status(502).json({ error: err.message });
+    res.status(502).json({ error: gmailErrorMessage(err,
+      'Your reply was NOT sent, but your text is saved — wait a minute and press Send again.') });
   }
 });
 
