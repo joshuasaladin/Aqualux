@@ -151,12 +151,14 @@ app.post('/api/gmail/disconnect', (req, res) => {
 const LEAD_SELECT = `
   SELECT l.*, c.name AS client_name, c.email AS client_email, c.phone AS client_phone,
          COALESCE(s.total, 0) AS services_total,
-         COALESCE(s.owed, 0)  AS services_owed
+         COALESCE(s.owed, 0)  AS services_owed,
+         COALESCE(s.commission, 0) AS services_commission
   FROM leads l JOIN clients c ON c.id = l.client_id
   LEFT JOIN (
     SELECT lead_id,
            SUM(downpayment + balance) AS total,
-           SUM(downpayment * (1 - downpayment_paid) + balance * (1 - balance_paid)) AS owed
+           SUM(downpayment * (1 - downpayment_paid) + balance * (1 - balance_paid)) AS owed,
+           SUM(commission) AS commission
     FROM lead_services GROUP BY lead_id
   ) s ON s.lead_id = l.id`;
 

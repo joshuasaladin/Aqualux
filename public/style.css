@@ -399,7 +399,7 @@ button.gmail-attach-chip:hover { background: #d3eff6; }
 .svc-totals { margin-top: 10px; font-size: .88rem; color: var(--muted); }
 .svc-totals .ok { color: var(--green); }
 .svc-totals .due { color: var(--red); }
-.owed { font-size: .8rem; color: var(--amber); font-weight: 600; }
+.card-comm { font-size: .8rem; color: var(--green); font-weight: 600; }
 .pay-card { cursor: default; }
 .pay-amount { color: var(--green); }
 

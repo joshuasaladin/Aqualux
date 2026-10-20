@@ -339,7 +339,6 @@ function showView(name) {
     b.classList.toggle('active', b.dataset.view === name));
 
   if (name === 'leads') loadLeads();
-  if (name === 'confirmed') loadConfirmed();
   if (name === 'bookings') loadBookings();
   if (name === 'calendar') renderCalendar();
   if (name === 'payments') loadPayments();
@@ -394,8 +393,8 @@ function leadCard(l) {
       ${statusBadge(l.status)} ${payBadge(l.paid, owed)} ${bookBadge(l.booking_confirmed)}
       ${l.merged_count > 1 ? `<span class="badge multi">📨 ${l.merged_count} submissions</span>` : ''}
       <span class="card-right">
-        ${total ? `<span class="card-amount">${money(total)}${owed > 0 && owed < total ?
-          ` <span class="owed">(${money(owed)} due)</span>` : ''}</span>` : ''}
+        ${total ? `<span class="card-amount">${money(total)}${l.services_commission > 0 ?
+          ` <span class="card-comm" title="Our commission">(${money(l.services_commission)} commission)</span>` : ''}</span>` : ''}
         ${svcDateBadge(l.service_date, l.service_time)}
       </span>
     </div>
@@ -444,7 +443,6 @@ async function loadLeads() {
     if (go === 'bookings') { bookingPeriod = 'this-month'; showView('bookings'); return; }
     setLeadGroup(go);
   }));
-  updateConfirmedDot(summary);
   $('#tab-count-new').textContent = summary.new_leads || 0;
   $('#tab-count-inprogress').textContent = summary.in_progress || 0;
   $('#tab-count-responded').textContent = summary.responded || 0;
@@ -498,27 +496,6 @@ $('#btn-sync').addEventListener('click', async () => {
   }
 });
 
-/* ---------------------------------------------------------- confirmed --- */
-function updateConfirmedDot(summary) {
-  $('#confirmed-dot').classList.toggle('hidden', !summary.confirmed_new_mail);
-}
-
-async function loadConfirmed() {
-  const rows = await api('/leads?tab=confirmed');
-  const today = new Date().toISOString().slice(0, 10);
-  // Undated bookings still need attention, so they stay with "upcoming"
-  // rather than getting lost at the bottom with true past bookings.
-  const future = rows.filter((l) => !l.service_date || l.service_date >= today)
-    .sort((a, b) => (a.service_date || '9999-99-99').localeCompare(b.service_date || '9999-99-99'));
-  const past = rows.filter((l) => l.service_date && l.service_date < today)
-    .sort((a, b) => b.service_date.localeCompare(a.service_date));
-  const section = (title, list) => list.length
-    ? `<h3 class="confirmed-section-title">${title}</h3>${list.map(leadCard).join('')}` : '';
-  $('#confirmed-list').innerHTML = rows.length
-    ? section('Upcoming bookings', future) + section('Past bookings', past)
-    : `<div class="empty">No confirmed bookings yet. Open a lead and switch on “Booking confirmed”.</div>`;
-  bindLeadCards('#confirmed-list');
-}
 
 /* ----------------------------------------------------------- bookings --- */
 // The old bookings spreadsheet, live: one line per booked service.
@@ -1923,11 +1900,8 @@ async function boot() {
   updateGmailDot();
   showView('leads');
   // light auto-refresh so new emails appear without reloading
-  setInterval(async () => {
-    if (currentView === 'leads' && $('#drawer').classList.contains('hidden')) { loadLeads(); return; }
-    // keep the Confirmed nav dot fresh even while sitting on another tab
-    const summary = await api('/leads/summary').catch(() => null);
-    if (summary) updateConfirmedDot(summary);
+  setInterval(() => {
+    if (currentView === 'leads' && $('#drawer').classList.contains('hidden')) loadLeads();
   }, 60000);
 }
 
