@@ -216,7 +216,7 @@
         <label>Email<input name="payer_email" type="email" placeholder="their@email.com"></label>
       </div>
       <div class="form-row">
-        <label>Service<input name="service" placeholder="e.g. Catamaran Tour"></label>
+        <label>Service<input name="service"></label>
         <label>Method
           <select name="source">
             <option>Cash</option><option>Bank transfer</option><option>Venmo</option>
@@ -248,10 +248,10 @@
     <h2>Add service</h2>
     <form id="service-form">
       <div class="form-row">
-        <label>Category *<input name="category" required placeholder="e.g. Water Activity" list="category-list"></label>
-        <label>Service *<input name="service_name" required placeholder="e.g. Pirates Sail Boat Tour"></label>
+        <label>Category *<input name="category" required list="category-list"></label>
+        <label>Service *<input name="service_name" required></label>
       </div>
-      <label>Company / Provider<input name="company" placeholder="e.g. Jolly Pirates"></label>
+      <label>Company / Provider<input name="company"></label>
       <p class="reply-hint">Add pricing options, contact info and more after creating — click the service to expand it.</p>
       <div class="modal-actions">
         <button type="button" class="btn" id="service-cancel">Cancel</button>

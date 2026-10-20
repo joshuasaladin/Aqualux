@@ -895,8 +895,8 @@ function optionEditRow(o = {}, idx) {
   return `
   <div class="opt-row" data-opt="${id}">
     <div class="opt-row-line1">
-      <input class="opt-name" placeholder="Option name (e.g. Sunset Tour)" value="${esc(o.option_name || '')}">
-      <input class="opt-timing" placeholder="Timing (e.g. 5:30pm–7:30pm)" value="${esc(o.timing || '')}">
+      <input class="opt-name" placeholder="Option name" value="${esc(o.option_name || '')}">
+      <input class="opt-timing" placeholder="Timing" value="${esc(o.timing || '')}">
       <button type="button" class="btn btn-sm opt-del" title="Remove option">×</button>
     </div>
     <div class="opt-row-line2">
@@ -933,8 +933,8 @@ function serviceCardBody(s) {
         <label>Company / Provider<input class="sf-company" value="${esc(s.company)}"></label>
         <label>Contact<input class="sf-contact" value="${esc(s.contact)}" placeholder="Phone / email"></label>
         <label>Booking method<input class="sf-booking" value="${esc(s.booking_method)}" list="booking-method-list"></label>
-        <label>Info needed to book<input class="sf-info" value="${esc(s.info_needed)}" placeholder="e.g. Date, People, Timing"></label>
-        <label>Commission<input class="sf-commission" value="${esc(s.commission)}" placeholder="e.g. 15% or $20/booking"></label>
+        <label>Info needed to book<input class="sf-info" value="${esc(s.info_needed)}"></label>
+        <label>Commission<input class="sf-commission" value="${esc(s.commission)}"></label>
         <label>Internal notes<input class="sf-internal" value="${esc(s.internal_notes)}" placeholder="Vendor-only notes"></label>
       </div>
 
@@ -1209,7 +1209,12 @@ function commissionPercent(book, serviceName) {
   return m ? Number(m[1]) : 0;
 }
 
+// Set by the open lead: finishes any autosave still waiting, so closing the
+// drawer or opening another lead never drops the last change.
+let pendingLeadSave = null;
+
 function closeDrawer() {
+  if (pendingLeadSave) { pendingLeadSave(); pendingLeadSave = null; }
   $('#drawer').classList.add('hidden');
   $('#drawer-backdrop').classList.add('hidden');
 }
@@ -1223,6 +1228,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 async function openLead(id) {
+  if (pendingLeadSave) { await pendingLeadSave(); pendingLeadSave = null; }
   const [l, templates] = await Promise.all([api('/leads/' + id), api('/templates').catch(() => [])]);
   const canEmail = gmailStatus?.connected;
   const wa = whatsappUrl(l.client_phone);
@@ -1246,18 +1252,18 @@ async function openLead(id) {
   </div>
   <div class="drawer-body">
 
-    <div class="panel">
+    <div class="panel" id="d-booking-panel">
       <h3>Booking</h3>
       <div class="form-row">
-        <label>Service requested<input id="d-service" value="${esc(l.service)}" placeholder="e.g. Yacht charter"></label>
-        <label>How many people<input id="d-party" type="number" min="1" step="1" value="${l.party_size || ''}" placeholder="e.g. 8"></label>
+        <label>Service requested<input id="d-service" value="${esc(l.service)}"></label>
+        <label>How many people<input id="d-party" type="number" min="1" step="1" value="${l.party_size || ''}"></label>
       </div>
-      <label>Client phone / WhatsApp<input id="d-phone" type="tel" value="${esc(l.client_phone || '')}" placeholder="e.g. +1 305 555 0117 or 567 0134"></label>
+      <label>Client phone / WhatsApp<input id="d-phone" type="tel" value="${esc(l.client_phone || '')}"></label>
       <div class="form-row">
         <label>Service date<input id="d-date" type="date" value="${l.service_date || ''}"></label>
         <label>Start time<input id="d-time" type="time" value="${l.service_time || ''}"></label>
       </div>
-      <label>Notes<input id="d-notes" value="${esc(l.notes)}" placeholder="Internal notes…"></label>
+      <label>Notes<input id="d-notes" value="${esc(l.notes)}"></label>
       <div class="toggle-row">
         <label class="toggle ${l.paid ? 'on-paid' : ''}">
           <input type="checkbox" id="d-paid" ${l.paid ? 'checked' : ''}> Paid ${l.paid ? '✓' : ''}
@@ -1266,12 +1272,11 @@ async function openLead(id) {
           <input type="checkbox" id="d-confirmed" ${l.booking_confirmed ? 'checked' : ''}> Booking confirmed ${l.booking_confirmed ? '✓' : ''}
         </label>
       </div>
-      ${l.gcal_event_id ? `<div class="gcal-badge">🗓️ Synced to Google Calendar (yellow)</div>` : ''}
-      <button class="btn btn-primary btn-sm" id="d-save">Save</button>
-      <span class="send-status" id="d-save-status"></span>
+      <div class="gcal-badge ${l.gcal_event_id ? '' : 'hidden'}" id="d-gcal">🗓️ Synced to Google Calendar (yellow)</div>
+      <span class="send-status autosave-status" id="d-save-status"></span>
     </div>
 
-    <div class="panel">
+    <div class="panel" id="d-lines-panel">
       <h3>Bookings &amp; commission</h3>
       <p class="reply-hint" style="margin:-4px 0 10px">One line per service booked — this is what fills the <b>Bookings</b> page once the booking is confirmed.</p>
       <div id="svc-rows"></div>
@@ -1341,10 +1346,10 @@ async function openLead(id) {
     row.className = 'bk-edit';
     row.innerHTML = `
       <div class="bk-edit-grid">
-        <label class="bk-f-service">Service<input class="svc-name" list="svc-type-list" placeholder="e.g. Car Rental" value="${esc(s.name || '')}"></label>
+        <label class="bk-f-service">Service<input class="svc-name" list="svc-type-list" value="${esc(s.name || '')}"></label>
         <label>Date<input class="svc-date" type="date" value="${s.service_date || ''}"></label>
-        <label>Info<input class="svc-info" placeholder="e.g. 3 day, Sunset tour" value="${esc(s.info || '')}"></label>
-        <label>People / type<input class="svc-people" placeholder="e.g. 6, VAN, SEDAN" value="${esc(s.people || '')}"></label>
+        <label>Info<input class="svc-info" value="${esc(s.info || '')}"></label>
+        <label>People / type<input class="svc-people" value="${esc(s.people || '')}"></label>
       </div>
       <div class="bk-edit-grid bk-money">
         <label>Price (total)<input class="svc-price" type="number" min="0" step="0.01" placeholder="0" value="${price || ''}"></label>
@@ -1353,11 +1358,11 @@ async function openLead(id) {
           <span class="svc-comm-pct"></span></label>
       </div>
       <div class="bk-edit-grid bk-last">
-        <label>Provider / company<input class="svc-provider" list="provider-list" placeholder="e.g. Mama Auto" value="${esc(s.provider || '')}"></label>
-        <label class="bk-f-notes">Notes<input class="svc-notes" placeholder="e.g. paying $30 cleaning fee" value="${esc(s.notes || '')}"></label>
+        <label>Provider / company<input class="svc-provider" list="provider-list" value="${esc(s.provider || '')}"></label>
+        <label class="bk-f-notes">Notes<input class="svc-notes" value="${esc(s.notes || '')}"></label>
         <button class="btn btn-sm btn-danger svc-del" title="Remove this service">Remove</button>
       </div>`;
-    row.querySelector('.svc-del').addEventListener('click', () => { row.remove(); updateTotals(); });
+    row.querySelector('.svc-del').addEventListener('click', () => { row.remove(); updateTotals(); scheduleLeadSave(0); });
     row.querySelectorAll('input').forEach((i) => i.addEventListener('input', () => {
       // commission % from the Services book (e.g. "15%"), filled in only
       // while the commission box is still empty — never over a typed amount
@@ -1428,28 +1433,71 @@ async function openLead(id) {
   followLead('#d-date', '.svc-date');
   followLead('#d-service', '.svc-name');
 
-  $('#d-save').addEventListener('click', async () => {
-    $('#d-save-status').textContent = 'Saving…';
-    const saved = await api('/leads/' + id, {
-      method: 'PATCH',
-      body: JSON.stringify({
-        service: $('#d-service').value,
-        service_date: $('#d-date').value || null,
-        service_time: $('#d-time').value || null,
-        party_size: $('#d-party').value || null,
-        client_phone: $('#d-phone').value,
-        paid: $('#d-paid').checked,
-        booking_confirmed: $('#d-confirmed').checked,
-        notes: $('#d-notes').value,
-        services: collectServices()
-      })
-    });
-    if (saved.calendar_sync_error) {
-      alert('Saved, but Google Calendar sync failed: ' + saved.calendar_sync_error);
-    }
-    openLead(id);
-    refreshCurrentView();
+  // --- autosave: every change in Booking and Bookings & commission is
+  // saved on its own a moment after you stop typing — no Save button. Only
+  // the fields that actually changed are sent, so Google Calendar is only
+  // updated when the date, time, service or confirmation changes. ---
+  const saveStatus = $('#d-save-status');
+  const leadState = () => ({
+    service: $('#d-service').value,
+    service_date: $('#d-date').value || null,
+    service_time: $('#d-time').value || null,
+    party_size: $('#d-party').value || null,
+    client_phone: $('#d-phone').value,
+    paid: $('#d-paid').checked,
+    booking_confirmed: $('#d-confirmed').checked,
+    notes: $('#d-notes').value,
+    services: collectServices()
   });
+  let lastSaved = leadState();
+  let saveTimer = null, saveChain = Promise.resolve();
+  function saveLeadNow() {
+    clearTimeout(saveTimer); saveTimer = null;
+    saveChain = saveChain.then(async () => {
+      const now = leadState();
+      const changed = Object.fromEntries(Object.entries(now)
+        .filter(([k, v]) => JSON.stringify(v) !== JSON.stringify(lastSaved[k])));
+      if (!Object.keys(changed).length) return;
+      saveStatus.classList.remove('err');
+      saveStatus.textContent = 'Saving…';
+      try {
+        const saved = await api('/leads/' + id, { method: 'PATCH', body: JSON.stringify(changed) });
+        lastSaved = now;
+        $('#d-gcal').classList.toggle('hidden', !saved.gcal_event_id);
+        if (saved.calendar_sync_error) {
+          saveStatus.classList.add('err');
+          saveStatus.textContent = 'Saved ✓ — but Google Calendar didn’t update: ' + saved.calendar_sync_error;
+        } else {
+          saveStatus.textContent = 'Saved ✓';
+          setTimeout(() => { if (saveStatus.textContent === 'Saved ✓') saveStatus.textContent = ''; }, 2000);
+        }
+        refreshCurrentView(); // the list behind the drawer
+      } catch (err) {
+        saveStatus.classList.add('err');
+        saveStatus.textContent = 'Not saved: ' + err.message + ' — it will retry on your next change.';
+      }
+    });
+    return saveChain;
+  }
+  function scheduleLeadSave(delay = 800) {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveLeadNow, delay);
+  }
+  pendingLeadSave = () => (saveTimer ? saveLeadNow() : saveChain);
+  for (const panel of [$('#d-booking-panel'), $('#d-lines-panel')]) {
+    // typing waits for a pause; ticks, dates and picked options save at once
+    panel.addEventListener('input', (e) =>
+      scheduleLeadSave(e.target.type === 'checkbox' || e.target.type === 'date' || e.target.type === 'time' ? 150 : 800));
+    panel.addEventListener('change', () => scheduleLeadSave(150));
+  }
+  // the switches show their state straight away
+  for (const [box, cls] of [['#d-paid', 'on-paid'], ['#d-confirmed', 'on-confirmed']]) {
+    $(box).addEventListener('change', () => {
+      const label = $(box).closest('label');
+      label.classList.toggle(cls, $(box).checked);
+      label.lastChild.textContent = label.lastChild.textContent.replace(/\s*✓?\s*$/, $(box).checked ? ' ✓' : ' ');
+    });
+  }
 
   // --- auto-expanding reply box ---
   const replyBox = $('#d-reply');
@@ -1601,6 +1649,7 @@ async function openLead(id) {
 
 /* ------------------------------------------------------- client drawer --- */
 async function openClient(id) {
+  if (pendingLeadSave) { await pendingLeadSave(); pendingLeadSave = null; }
   const c = await api('/clients/' + id);
   $('#drawer-content').innerHTML = `
   <div class="drawer-head">
@@ -1616,7 +1665,7 @@ async function openClient(id) {
       <h3>Contact details</h3>
       <div class="form-row">
         <label>Name<input id="c-name" value="${esc(c.name)}"></label>
-        <label>Phone / WhatsApp<input id="c-phone" type="tel" value="${esc(c.phone || '')}" placeholder="e.g. +1 305 555 0117"></label>
+        <label>Phone / WhatsApp<input id="c-phone" type="tel" value="${esc(c.phone || '')}"></label>
       </div>
       <label>Email<input id="c-email" type="email" value="${esc(c.email)}"></label>
       <label>Notes<textarea id="c-notes" rows="3" placeholder="Preferences, VIP status, allergies…">${esc(c.notes)}</textarea></label>
@@ -1722,7 +1771,7 @@ async function loadSettings() {
     $('#tpl-list').innerHTML = tpls.length ? tpls.map((t, i) => `
       <div class="tpl-row" data-i="${i}">
         <div class="tpl-row-head">
-          <input class="tpl-name" value="${esc(t.name)}" placeholder="Template name, e.g. Chef menu options">
+          <input class="tpl-name" value="${esc(t.name)}" placeholder="Template name">
           <button class="btn btn-sm btn-danger tpl-del" title="Delete template">×</button>
         </div>
         <textarea class="tpl-body" rows="5" placeholder="Hi {first_name}, …">${esc(t.body)}</textarea>

@@ -356,6 +356,7 @@ button.gmail-attach-chip:hover { background: #d3eff6; }
 .reply-hint { font-size: .8rem; color: var(--muted); }
 .reply-hint a { color: var(--aqua-dark); }
 .send-status { font-size: .82rem; color: var(--muted); }
+.autosave-status { display: block; min-height: 1.2em; margin-top: 6px; }
 .send-status.err { color: var(--red); }
 .file-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .file-list:empty { display: none; }
