@@ -383,7 +383,8 @@ function refreshCurrentView() { showView(currentView); }
 
 /* -------------------------------------------------------------- leads --- */
 function leadCard(l) {
-  const done = l.paid && l.booking_confirmed;
+  // paid + confirmed fades out — but never while the client is waiting on a reply
+  const done = l.paid && l.booking_confirmed && l.status === 'responded';
   const total = l.services_total || l.price || 0;
   const owed = l.services_total ? l.services_owed : 0;
   return `
@@ -433,27 +434,27 @@ async function loadLeads() {
       ? ` · ${money(summary.commission_month_received)} received` : '');
   $('#stat-grid').innerHTML = `
     <button class="stat stat-link" data-go="new"><div class="num green">${summary.new_leads || 0}</div><div class="label">New leads</div></button>
+    <button class="stat stat-link" data-go="inprogress"><div class="num amber">${summary.in_progress || 0}</div><div class="label">In progress</div></button>
     <button class="stat stat-link" data-go="responded"><div class="num red">${summary.responded || 0}</div><div class="label">Responded</div></button>
-    <button class="stat stat-link" data-go="confirmed"><div class="num">${summary.upcoming_count || 0}</div>
-      <div class="label">Confirmed bookings to come · <b>${money(summary.upcoming_value)}</b></div></button>
     <button class="stat stat-link" data-go="bookings"><div class="num green">${money(summary.commission_month)}</div>
       <div class="label">${commissionLabel}</div></button>
     <div class="stat"><div class="num">${summary.total || 0}</div><div class="label">Total leads</div></div>`;
   $('#stat-grid').querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => {
     const go = b.dataset.go;
-    if (go === 'new' || go === 'responded') { setLeadGroup(go); return; }
-    if (go === 'bookings') bookingPeriod = 'this-month';
-    showView(go);
+    if (go === 'bookings') { bookingPeriod = 'this-month'; showView('bookings'); return; }
+    setLeadGroup(go);
   }));
   updateConfirmedDot(summary);
   $('#tab-count-new').textContent = summary.new_leads || 0;
+  $('#tab-count-inprogress').textContent = summary.in_progress || 0;
   $('#tab-count-responded').textContent = summary.responded || 0;
   document.querySelectorAll('.lead-tab').forEach((t) => t.classList.toggle('active', t.dataset.group === leadGroup));
   $('#btn-archived').textContent = `🗄️ Archived${summary.archived ? ` (${summary.archived})` : ''}`;
   $('#btn-archived').classList.toggle('hidden', showArchived);
   const emptyMsg = showArchived ? 'Nothing archived.'
     : $('#lead-search').value ? 'No leads match that search.'
-    : leadGroup === 'new' ? 'All caught up — no leads waiting on a reply. 🎉'
+    : leadGroup === 'new' ? 'No new leads right now. 🎉'
+    : leadGroup === 'inprogress' ? 'Nobody has written back — all caught up. 🎉'
     : 'No leads waiting on the client right now.';
   $('#lead-list').innerHTML = rows.length
     ? rows.map(leadCard).join('')
@@ -559,7 +560,7 @@ async function loadBookings() {
 
   let rows = data.rows;
   if (svcSel.value) rows = rows.filter((x) => (x.service || '(no service)') === svcSel.value);
-  if ($('#bk-open-only').checked) rows = rows.filter((x) => x.owed > 0 || !x.commission_paid || x.needs_details);
+  if ($('#bk-open-only').checked) rows = rows.filter((x) => !x.commission_paid || x.needs_details);
   const t = (k) => rows.reduce((a, x) => a + (Number(x[k]) || 0), 0);
   const commIn = rows.filter((x) => x.commission_paid).reduce((a, x) => a + x.commission, 0);
 
@@ -568,7 +569,7 @@ async function loadBookings() {
     <div class="stat"><div class="num">${money(t('price'))}</div><div class="label">Total booking value</div></div>
     <div class="stat"><div class="num green">${money(t('commission'))}</div><div class="label">Our commission</div></div>
     <div class="stat"><div class="num ${t('commission') - commIn > 0 ? 'amber' : ''}">${money(t('commission') - commIn)}</div><div class="label">Commission still to receive</div></div>
-    <div class="stat"><div class="num ${t('owed') > 0 ? 'amber' : ''}">${money(t('owed'))}</div><div class="label">Guests still owe</div></div>`;
+`;
 
   const missing = rows.filter((x) => x.needs_details || x.missing_commission).length;
   $('#bk-needs').classList.toggle('hidden', !missing);
@@ -578,7 +579,7 @@ async function loadBookings() {
   $('#bk-table').innerHTML = rows.length ? `
     <thead><tr>
       <th>Name</th><th>Date</th><th>Service</th><th>Info</th><th>People</th>
-      <th class="r">Price</th><th class="r">Commission</th><th>Guest paid</th><th>Commission paid</th><th>Notes</th>
+      <th class="r">Price</th><th class="r">Commission</th><th>Commission paid</th><th>Notes</th>
     </tr></thead>
     <tbody>${rows.map((x) => `
       <tr data-lead="${x.lead_id}" class="${x.date && x.date < today ? 'past' : ''}">
@@ -589,13 +590,12 @@ async function loadBookings() {
         <td class="bk-people" data-label="People">${esc(x.people || '')}</td>
         <td class="r bk-price" data-label="Price">${x.price ? money(x.price) : ''}</td>
         <td class="r bk-comm" data-label="Commission">${x.needs_details || x.missing_commission ? '<span class="fill-in">Fill in</span>' : money(x.commission)}</td>
-        <td class="bk-gp" data-label="Guest paid">${yesNo(x.guest_paid, 'guest_paid', x.booking_id, x.owed > 0 ? `${money(x.owed)} still to pay — tap to mark paid in full` : 'Tap to mark as not paid')}</td>
         <td class="bk-cp" data-label="Commission paid">${x.needs_details ? '' : yesNo(x.commission_paid ? 'yes' : 'no', 'commission_paid', x.booking_id, 'Tap to change')}</td>
         <td class="bk-notes">${esc([x.provider, x.notes].filter(Boolean).join(' — '))}</td>
       </tr>`).join('')}</tbody>
     <tfoot><tr>
       <td colspan="5">Total · ${rows.length} booking${rows.length === 1 ? '' : 's'}</td>
-      <td class="r">${money(t('price'))}</td><td class="r">${money(t('commission'))}</td><td colspan="3"></td>
+      <td class="r">${money(t('price'))}</td><td class="r">${money(t('commission'))}</td><td colspan="2"></td>
     </tr></tfoot>`
     : `<tbody><tr><td class="empty">No confirmed bookings ${esc(r.label === 'all time' ? 'yet' : 'for ' + r.label)}.</td></tr></tbody>`;
 
@@ -993,7 +993,6 @@ async function runCatalogSync(btn, idleLabel) {
   btn.textContent = idleLabel;
 }
 
-$('#btn-reimport-catalog-top').addEventListener('click', () => runCatalogSync($('#btn-reimport-catalog-top'), '⟳ Sync starter catalog'));
 
 async function loadServices() {
   serviceBookPromise = null; // the booking suggestions re-read any edits made here
@@ -1319,7 +1318,6 @@ async function openLead(id) {
         <div class="reply-actions">
           <button class="btn btn-primary" id="d-send" ${canEmail ? '' : 'disabled'}>Send reply ✉️</button>
           <button class="btn" id="d-attach" ${canEmail ? '' : 'disabled'} title="Attach files">📎 Attach</button>
-          <button class="btn" id="d-footer" ${canEmail ? '' : 'disabled'} title="Insert your footer at the bottom of the message">Footer</button>
           <select id="d-template" class="template-pick" ${canEmail ? '' : 'disabled'} title="Insert a saved reply">
             <option value="">${templates.length ? '📝 Templates…' : '📝 Templates (add in Settings)'}</option>
             ${templates.map((t, i) => `<option value="${i}">${esc(t.name)}</option>`).join('')}
@@ -1355,8 +1353,8 @@ async function openLead(id) {
   });
 
   // --- bookings editor: one card per booked service, the columns of the
-  // old bookings spreadsheet. Price is entered as a total; the balance is
-  // whatever's left after the deposit. ---
+  // old bookings spreadsheet. Just the total price and our commission —
+  // whether the guest has paid is the lead's own Paid switch above. ---
   const svcRows = $('#svc-rows');
   const book = await serviceBook();
   const num = (v) => Number(v) || 0;
@@ -1373,10 +1371,6 @@ async function openLead(id) {
       </div>
       <div class="bk-edit-grid bk-money">
         <label>Price (total)<input class="svc-price" type="number" min="0" step="0.01" placeholder="0" value="${price || ''}"></label>
-        <label>Deposit<input class="svc-down" type="number" min="0" step="0.01" placeholder="0" value="${num(s.downpayment) || ''}">
-          <span class="mini-check"><input type="checkbox" class="svc-down-paid" ${s.downpayment_paid ? 'checked' : ''}> received</span></label>
-        <label>Rest to pay<div class="svc-bal-show">—</div>
-          <span class="mini-check"><input type="checkbox" class="svc-bal-paid" ${s.balance_paid ? 'checked' : ''}> received</span></label>
         <label>Our commission<input class="svc-comm" type="number" min="0" step="0.01" placeholder="0" value="${num(s.commission) || ''}">
           <span class="mini-check"><input type="checkbox" class="svc-comm-paid" ${s.commission_paid ? 'checked' : ''}> received</span>
           <span class="svc-comm-pct"></span></label>
@@ -1393,7 +1387,6 @@ async function openLead(id) {
       if (i.matches('.svc-price, .svc-name')) autoCommission(row);
       updateTotals();
     }));
-    row.querySelectorAll('.svc-down-paid, .svc-bal-paid').forEach((c) => c.addEventListener('change', syncPaidSwitch));
     row.querySelector('.svc-comm').addEventListener('input', (e) => { e.target.dataset.auto = ''; });
     svcRows.appendChild(row);
     updateRow(row);
@@ -1407,24 +1400,23 @@ async function openLead(id) {
   }
   function updateRow(row) {
     const price = num(row.querySelector('.svc-price').value);
-    const down = num(row.querySelector('.svc-down').value);
-    row.querySelector('.svc-bal-show').textContent = price ? money(Math.max(0, price - down)) : '—';
     const comm = num(row.querySelector('.svc-comm').value);
     row.querySelector('.svc-comm-pct').textContent = price && comm ? `${Math.round(comm / price * 1000) / 10}% of price` : '';
   }
   function collectServices() {
     return [...svcRows.querySelectorAll('.bk-edit')].map((r) => {
+      // the whole price is stored as one amount, paid or not with the lead
       const price = num(r.querySelector('.svc-price').value);
-      const down = Math.min(num(r.querySelector('.svc-down').value), price || Infinity);
+      const paid = $('#d-paid').checked;
       return {
         name: r.querySelector('.svc-name').value.trim(),
         service_date: r.querySelector('.svc-date').value || null,
         info: r.querySelector('.svc-info').value,
         people: r.querySelector('.svc-people').value,
-        downpayment: down,
-        downpayment_paid: r.querySelector('.svc-down-paid').checked,
-        balance: Math.max(0, price - down),
-        balance_paid: r.querySelector('.svc-bal-paid').checked,
+        downpayment: 0,
+        downpayment_paid: paid,
+        balance: price,
+        balance_paid: paid,
         commission: num(r.querySelector('.svc-comm').value),
         commission_paid: r.querySelector('.svc-comm-paid').checked,
         provider: r.querySelector('.svc-provider').value,
@@ -1432,26 +1424,16 @@ async function openLead(id) {
       };
     }).filter((s) => s.name || s.downpayment || s.balance || s.commission);
   }
-  const owedOf = (s) => (s.downpayment_paid ? 0 : s.downpayment) + (s.balance_paid ? 0 : s.balance);
   function updateTotals() {
     svcRows.querySelectorAll('.bk-edit').forEach(updateRow);
     const list = collectServices();
-    const total = list.reduce((a, s) => a + s.downpayment + s.balance, 0);
-    const due = list.reduce((a, s) => a + owedOf(s), 0);
+    const total = list.reduce((a, s) => a + s.balance, 0);
     const comm = list.reduce((a, s) => a + s.commission, 0);
     $('#svc-totals').innerHTML = total || comm
-      ? `Total <b>${money(total)}</b> · Received <b class="ok">${money(total - due)}</b> · Still due <b class="${due > 0 ? 'due' : 'ok'}">${money(due)}</b>` +
-        ` · Our commission <b>${money(comm)}</b>`
-      : '';
-  }
-  // ticking every payment received switches the lead to Paid (and back)
-  function syncPaidSwitch() {
-    const list = collectServices().filter((s) => s.downpayment + s.balance > 0);
-    if (!list.length) return;
-    $('#d-paid').checked = list.every((s) => owedOf(s) === 0);
+      ? `Total price <b>${money(total)}</b> · Our commission <b class="ok">${money(comm)}</b>` : '';
   }
   if (l.services.length) l.services.forEach(addServiceRow);
-  else addServiceRow({ name: l.service, balance: l.price || 0, balance_paid: l.paid, service_date: l.service_date,
+  else addServiceRow({ name: l.service, balance: l.price || 0, service_date: l.service_date,
                        people: l.party_size ? String(l.party_size) : '' });
   updateTotals();
   $('#svc-add').addEventListener('click', () => addServiceRow({ service_date: $('#d-date').value }));
@@ -1549,25 +1531,6 @@ async function openLead(id) {
   ccBox.addEventListener('change', () => { saveCc(); renderCcSuggestions(); });
   renderCcSuggestions();
 
-  // --- footer button: insert the signature at the bottom of the message ---
-  $('#d-footer')?.addEventListener('click', async () => {
-    const { image } = await api('/signature-image');
-    if (image) {
-      const st = $('#d-send-status');
-      st.classList.remove('err');
-      st.textContent = '🖼️ Your signature image is added to every email automatically.';
-      return;
-    }
-    const { signature } = await api('/signature');
-    if (!signature?.trim()) { showView('settings'); return; }
-    const firstLine = signature.split('\n').map((l) => l.trim()).find((l) => l.length > 3);
-    if (firstLine && replyBox.value.includes(firstLine)) return; // already there
-    replyBox.value = replyBox.value.replace(/\s+$/, '') + '\n\n' + signature;
-    autoGrow();
-    replyBox.focus();
-    draftDirty = true;
-    saveDraftNow();
-  });
 
   // --- saved replies: fill in the lead's details and drop the text in at
   // the cursor (or as the whole message when the box is empty) ---

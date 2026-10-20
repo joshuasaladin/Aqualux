@@ -160,19 +160,30 @@ const LEAD_SELECT = `
     FROM lead_services GROUP BY lead_id
   ) s ON s.lead_id = l.id`;
 
+const INBOX_GROUPS = {
+  new: `(l.status = 'new_lead' AND l.booking_confirmed = 0)`,
+  inprogress: `(l.status = 'new_mail' OR (l.status = 'new_lead' AND l.booking_confirmed = 1))`,
+  responded: `(l.status = 'responded' AND l.booking_confirmed = 0)`
+};
+
 app.get('/api/leads', (req, res) => {
   const { q, tab, sort } = req.query;
   const where = [];
   const params = [];
-  // Confirmed bookings live in their own tab (+ Calendar/Clients) — the main
-  // Leads list shows only the active, not-yet-confirmed pipeline. Archived
-  // leads (dead ends, spam, "just asking") are kept out of it unless asked for.
+  // The Leads page is the inbox, in three sections:
+  //   new         - nobody has answered yet
+  //   inprogress  - we've answered before and they wrote back (incl. clients
+  //                 who already have a confirmed booking, so their emails
+  //                 are never missed)
+  //   responded   - last word was ours; waiting on the client
+  // Confirmed bookings that are fully answered live in Confirmed/Bookings.
   if (tab === 'confirmed') where.push('l.booking_confirmed = 1');
-  else where.push('l.booking_confirmed = 0', req.query.archived === '1' ? 'l.archived = 1' : 'l.archived = 0');
-  // "New leads" = waiting on your reply (incl. a client writing back);
-  // "Responded" = the ball is in their court.
-  if (req.query.group === 'new') where.push(`l.status IN ('new_lead','new_mail')`);
-  if (req.query.group === 'responded') where.push(`l.status = 'responded'`);
+  else {
+    where.push(req.query.archived === '1' ? 'l.archived = 1' : 'l.archived = 0');
+    const g = req.query.group;
+    if (g && INBOX_GROUPS[g]) where.push(INBOX_GROUPS[g]);
+    else if (!q && req.query.archived !== '1') where.push(`(${Object.values(INBOX_GROUPS).join(' OR ')})`);
+  }
   if (q) {
     where.push(`(c.name LIKE ? OR c.email LIKE ? OR c.phone LIKE ? OR l.service LIKE ? OR l.subject LIKE ? OR l.notes LIKE ?)`);
     const like = `%${q}%`;
@@ -285,13 +296,13 @@ app.patch('/api/bookings/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-// Leads page header: what needs a reply, what's waiting on the client, what
-// is booked and still to come, and this month's commission.
+// Leads page header: the three inbox sections, this month's commission, totals.
 app.get('/api/leads/summary', (req, res) => {
   const s = db.prepare(`
     SELECT
-      SUM(l.status IN ('new_lead','new_mail') AND l.archived = 0 AND l.booking_confirmed = 0) AS new_leads,
-      SUM(l.status = 'responded' AND l.archived = 0 AND l.booking_confirmed = 0) AS responded,
+      SUM(l.archived = 0 AND ${INBOX_GROUPS.new}) AS new_leads,
+      SUM(l.archived = 0 AND ${INBOX_GROUPS.inprogress}) AS in_progress,
+      SUM(l.archived = 0 AND ${INBOX_GROUPS.responded}) AS responded,
       SUM(l.archived = 1 AND l.booking_confirmed = 0) AS archived,
       SUM(l.booking_confirmed = 1 AND l.status = 'new_mail') AS confirmed_new_mail,
       COUNT(*) AS total

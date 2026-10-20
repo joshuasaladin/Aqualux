@@ -60,6 +60,7 @@
       </div>
       <div class="lead-tabs" id="lead-tabs">
         <button class="lead-tab" data-group="new">New leads <span class="lead-tab-count" id="tab-count-new"></span></button>
+        <button class="lead-tab" data-group="inprogress">In progress <span class="lead-tab-count" id="tab-count-inprogress"></span></button>
         <button class="lead-tab" data-group="responded">Responded <span class="lead-tab-count" id="tab-count-responded"></span></button>
       </div>
       <div id="archived-banner" class="archived-banner hidden">
@@ -92,13 +93,13 @@
           <option value="all">All time</option>
         </select>
         <select id="bk-service" title="Service"><option value="">All services</option></select>
-        <label class="bk-check"><input type="checkbox" id="bk-open-only"> Only open items (guest owes or commission not received)</label>
+        <label class="bk-check"><input type="checkbox" id="bk-open-only"> Only commission not received yet</label>
       </div>
       <div id="bk-needs" class="bk-needs hidden"></div>
       <div class="bk-table-wrap"><table class="bk-table" id="bk-table"></table></div>
       <h2>Totals per service</h2>
       <div class="bk-table-wrap bk-narrow"><table class="bk-table bk-by-service" id="bk-by-service"></table></div>
-      <p class="cal-hint">Every service on a confirmed booking shows here. Fill in the details under <b>Bookings &amp; commission</b> in the lead. Tap <b>Yes / No</b> to mark a guest or commission as paid.</p>
+      <p class="cal-hint">Every service on a confirmed booking shows here. Fill in the details under <b>Bookings &amp; commission</b> in the lead. Tap <b>Yes / No</b> to mark a commission as received.</p>
     </section>
 
     <!-- ============================ CALENDAR ============================= -->
@@ -138,7 +139,6 @@
     <section id="view-services" class="view hidden">
       <div class="filters">
         <input type="search" id="service-search" placeholder="Search category, company, service…">
-        <button class="btn" id="btn-reimport-catalog-top" title="Fill in any missing services or pricing options from the starter catalog">⟳ Sync starter catalog</button>
         <button class="btn btn-primary" id="btn-add-service">+ Add service</button>
       </div>
       <div id="service-groups"></div>

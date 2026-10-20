@@ -159,6 +159,7 @@ button.stat:hover { border-color: var(--aqua); box-shadow: 0 2px 8px rgba(15, 12
   background: #e9edf1; color: var(--muted); font-size: .78rem; text-align: center;
 }
 .lead-tab[data-group="new"] .lead-tab-count { background: #e4f6ec; color: var(--green); }
+.lead-tab[data-group="inprogress"] .lead-tab-count { background: #fdf3dd; color: var(--amber); }
 .lead-tab[data-group="responded"] .lead-tab-count { background: #fdeae7; color: var(--red); }
 
 /* ----------------------------------------------------------- bookings --- */
@@ -388,11 +389,10 @@ button.gmail-attach-chip:hover { background: #d3eff6; }
   padding: 12px 12px 2px; margin-bottom: 10px;
 }
 .bk-edit-grid { display: grid; grid-template-columns: 2fr 1.2fr 1.4fr 1.2fr; gap: 0 10px; }
-.bk-edit-grid.bk-money { grid-template-columns: repeat(4, 1fr); }
+.bk-edit-grid.bk-money { grid-template-columns: repeat(2, minmax(0, 280px)); }
 .bk-edit-grid.bk-last { grid-template-columns: 1.2fr 2fr auto; align-items: end; }
 .bk-edit-grid.bk-last .svc-del { margin-bottom: 10px; }
 .bk-edit input { padding: 7px 9px; font-size: .88rem; margin-top: 3px; }
-.svc-bal-show { padding: 7px 0; margin-top: 3px; font-size: .92rem; color: var(--text); font-weight: 600; }
 .mini-check { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; font-size: .78rem; color: var(--muted); }
 .mini-check input { width: auto; margin: 0; accent-color: var(--green); }
 .svc-comm-pct { display: block; font-size: .72rem; color: var(--muted); margin-top: 2px; }
@@ -625,7 +625,7 @@ main.wide { max-width: 1750px; }
   #bk-table, #bk-table tbody, #bk-table tfoot { display: block; }
   #bk-table tbody tr {
     display: grid; grid-template-columns: 1fr auto; gap: 2px 12px;
-    grid-template-areas: "name date" "svc price" "info comm" "people people" "gp cp" "notes notes";
+    grid-template-areas: "name date" "svc price" "info comm" "people cp" "notes notes";
     background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
     padding: 10px 12px; margin-bottom: 8px;
   }
@@ -638,7 +638,6 @@ main.wide { max-width: 1750px; }
   #bk-table .bk-people { grid-area: people; color: var(--muted); font-size: .84rem; }
   #bk-table .bk-price { grid-area: price; font-weight: 650; }
   #bk-table .bk-comm { grid-area: comm; color: var(--green); }
-  #bk-table .bk-gp { grid-area: gp; margin-top: 6px; }
   #bk-table .bk-cp { grid-area: cp; margin-top: 6px; text-align: right; }
   #bk-table .bk-notes { grid-area: notes; min-width: 0; font-size: .84rem; }
   #bk-table td[data-label]:not(.bk-price)::before { content: attr(data-label) ' '; color: var(--muted); font-size: .76rem; margin-right: 4px; }
