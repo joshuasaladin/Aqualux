@@ -234,6 +234,12 @@ ensureColumn('lead_services', 'commission', 'commission REAL NOT NULL DEFAULT 0'
 ensureColumn('lead_services', 'commission_paid', 'commission_paid INTEGER NOT NULL DEFAULT 0');
 ensureColumn('lead_services', 'provider', `provider TEXT DEFAULT ''`);
 ensureColumn('lead_services', 'notes', `notes TEXT DEFAULT ''`);
+// Each booked service is its own calendar entry, on its own day and time.
+ensureColumn('lead_services', 'service_time', 'service_time TEXT');
+ensureColumn('lead_services', 'gcal_event_id', 'gcal_event_id TEXT');
+// fingerprint of what was last sent to Google, so unchanged events aren't re-sent
+ensureColumn('lead_services', 'gcal_sig', 'gcal_sig TEXT');
+ensureColumn('leads', 'gcal_sig', 'gcal_sig TEXT');
 ensureColumn('leads', 'reply_cc', `reply_cc TEXT DEFAULT ''`);
 ensureColumn('leads', 'archived', 'archived INTEGER NOT NULL DEFAULT 0');
 ensureColumn('messages', 'from_name', `from_name TEXT DEFAULT ''`);

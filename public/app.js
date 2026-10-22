@@ -30,7 +30,12 @@ function esc(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-const money = (n) => '$' + (Number(n) || 0).toLocaleString('en-US', { maximumFractionDigits: 2 });
+// whole dollars stay "$300"; anything with cents always shows two: "$287.50"
+const money = (n) => {
+  const v = Math.round((Number(n) || 0) * 100) / 100;
+  const cents = v % 1 !== 0;
+  return '$' + v.toLocaleString('en-US', { minimumFractionDigits: cents ? 2 : 0, maximumFractionDigits: 2 });
+};
 
 function timeAgo(iso) {
   if (!iso) return '';
@@ -1344,10 +1349,15 @@ async function openLead(id) {
     const price = num(s.downpayment) + num(s.balance);
     const row = document.createElement('div');
     row.className = 'bk-edit';
+    // saved lines keep their id (and with it their calendar event); a new
+    // line gets a temporary key until the server hands back its id
+    if (s.id) row.dataset.id = s.id;
+    else row.dataset.key = 'n' + Math.random().toString(36).slice(2, 10);
     row.innerHTML = `
       <div class="bk-edit-grid">
         <label class="bk-f-service">Service<input class="svc-name" list="svc-type-list" value="${esc(s.name || '')}"></label>
         <label>Date<input class="svc-date" type="date" value="${s.service_date || ''}"></label>
+        <label>Time<input class="svc-time" type="time" value="${s.service_time || ''}"></label>
         <label>Info<input class="svc-info" value="${esc(s.info || '')}"></label>
         <label>People / type<input class="svc-people" value="${esc(s.people || '')}"></label>
       </div>
@@ -1391,8 +1401,11 @@ async function openLead(id) {
       const price = num(r.querySelector('.svc-price').value);
       const paid = $('#d-paid').checked;
       return {
+        id: r.dataset.id ? Number(r.dataset.id) : undefined,
+        key: r.dataset.id ? undefined : r.dataset.key,
         name: r.querySelector('.svc-name').value.trim(),
         service_date: r.querySelector('.svc-date').value || null,
+        service_time: r.querySelector('.svc-time').value || null,
         info: r.querySelector('.svc-info').value,
         people: r.querySelector('.svc-people').value,
         downpayment: 0,
@@ -1415,7 +1428,7 @@ async function openLead(id) {
       ? `Total price <b>${money(total)}</b> · Our commission <b class="ok">${money(comm)}</b>` : '';
   }
   if (l.services.length) l.services.forEach(addServiceRow);
-  else addServiceRow({ name: l.service, balance: l.price || 0, service_date: l.service_date,
+  else addServiceRow({ name: l.service, balance: l.price || 0, service_date: l.service_date, service_time: l.service_time,
                        people: l.party_size ? String(l.party_size) : '' });
   updateTotals();
   $('#svc-add').addEventListener('click', () => addServiceRow({ service_date: $('#d-date').value }));
@@ -1431,6 +1444,7 @@ async function openLead(id) {
     });
   }
   followLead('#d-date', '.svc-date');
+  followLead('#d-time', '.svc-time');
   followLead('#d-service', '.svc-name');
 
   // --- autosave: every change in Booking and Bookings & commission is
@@ -1462,6 +1476,13 @@ async function openLead(id) {
       saveStatus.textContent = 'Saving…';
       try {
         const saved = await api('/leads/' + id, { method: 'PATCH', body: JSON.stringify(changed) });
+        // new booking lines now have a real id — use it from here on
+        for (const [key, lineId] of Object.entries(saved.new_line_ids || {})) {
+          const row = svcRows.querySelector(`.bk-edit[data-key="${key}"]`);
+          if (row) { row.dataset.id = lineId; delete row.dataset.key; }
+          const line = (now.services || []).find((x) => x.key === key);
+          if (line) { line.id = lineId; delete line.key; }
+        }
         lastSaved = now;
         $('#d-gcal').classList.toggle('hidden', !saved.gcal_event_id);
         if (saved.calendar_sync_error) {

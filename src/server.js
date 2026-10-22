@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -130,12 +131,11 @@ app.post('/api/calendar/sync-confirmed', async (req, res) => {
   if (!gmail.hasCalendarScope()) {
     return res.status(400).json({ error: 'Google Calendar isn\'t connected — reconnect Gmail in Settings' });
   }
-  const ids = db.prepare(`
-    SELECT id FROM leads WHERE booking_confirmed = 1 AND service_date IS NOT NULL`).all().map((r) => r.id);
+  const ids = db.prepare(`SELECT id FROM leads WHERE booking_confirmed = 1`).all().map((r) => r.id);
   let synced = 0;
   const errors = [];
   for (const id of ids) {
-    const err = await syncLeadToCalendar(id);
+    const err = await syncLeadToCalendar(id, { force: true });
     if (err) errors.push(`lead #${id}: ${err}`);
     else synced++;
   }
@@ -217,6 +217,9 @@ function bookingRows() {
     SELECT ls.id AS booking_id, l.id AS lead_id, c.name AS client_name,
            COALESCE(ls.service_date, l.service_date) AS date,
            COALESCE(NULLIF(ls.name, ''), l.service) AS service,
+           COALESCE(ls.service_time, CASE WHEN ls.service_date IS NULL OR ls.service_date = l.service_date
+                                          THEN l.service_time END) AS time,
+           l.paid AS lead_paid,
            ls.info, ls.people, ls.downpayment + ls.balance AS price,
            ls.downpayment * ls.downpayment_paid + ls.balance * ls.balance_paid AS received,
            ls.commission, ls.commission_paid, ls.provider, ls.notes, 0 AS needs_details
@@ -224,7 +227,7 @@ function bookingRows() {
     JOIN leads l ON l.id = ls.lead_id JOIN clients c ON c.id = l.client_id
     WHERE l.booking_confirmed = 1
     UNION ALL
-    SELECT NULL, l.id, c.name, l.service_date, l.service,
+    SELECT NULL, l.id, c.name, l.service_date, l.service, l.service_time, l.paid,
            '', COALESCE(CAST(l.party_size AS TEXT), ''), COALESCE(l.price, 0),
            CASE WHEN l.paid = 1 THEN COALESCE(l.price, 0) ELSE 0 END,
            0, 0, '', l.notes, 1
@@ -358,25 +361,91 @@ app.post('/api/leads', (req, res) => {
   res.status(201).json(getLeadFull(info.lastInsertRowid));
 });
 
-// Push a lead's calendar state to Google (create/update/delete the event as
-// needed) and persist the resulting event id. Never throws — a failure is
-// returned as a string so the caller can surface it without losing the save.
-async function syncLeadToCalendar(id) {
+/**
+ * What a confirmed lead puts on the calendar: one entry per booked service,
+ * on that service's own date and time. The lead's top-level date is only a
+ * fallback — for a service line with no date of its own, or a lead whose
+ * booking lines haven't been filled in yet.
+ */
+function calendarEntries(lead) {
+  if (!lead.booking_confirmed) return [];
+  const base = {
+    client_name: lead.client_name, client_email: lead.client_email, client_phone: lead.client_phone,
+    paid: lead.paid
+  };
+  if (!lead.services.length) {
+    return lead.service_date ? [{
+      ...base, lineId: null, requestKey: lead.id, service: lead.service, party_size: lead.party_size,
+      service_date: lead.service_date, service_time: lead.service_time, notes: lead.notes
+    }] : [];
+  }
+  return lead.services.map((s) => ({
+    ...base, lineId: s.id, requestKey: `${lead.id}-${s.id}`,
+    service: s.name || lead.service,
+    service_date: s.service_date || lead.service_date,
+    service_time: s.service_time ||
+      (!s.service_date || s.service_date === lead.service_date ? lead.service_time : null),
+    info: s.info, people: s.people, provider: s.provider, notes: s.notes
+  })).filter((e) => e.service_date);
+}
+
+const eventSig = (entry) =>
+  crypto.createHash('sha1').update(JSON.stringify(gmail.calendarEventBody(entry))).digest('hex');
+
+/**
+ * Bring a lead's Google Calendar events in line with its bookings: create
+ * or update one per booked service, delete the ones no longer needed.
+ * Events whose content hasn't changed aren't sent again (unless `force`).
+ * Never throws — a failure comes back as a message so the save still stands.
+ */
+async function syncLeadToCalendar(id, { force = false } = {}) {
   const full = getLeadFull(id);
   if (!full) return null;
-  try {
-    if (full.booking_confirmed && full.service_date) {
-      const eventId = await gmail.upsertCalendarEvent(full);
-      if (eventId !== full.gcal_event_id) {
-        db.prepare(`UPDATE leads SET gcal_event_id = ? WHERE id = ?`).run(eventId, id);
+  const entries = calendarEntries(full);
+  const errors = [];
+  const attempt = async (fn) => { try { await fn(); } catch (err) { errors.push(err.message); } };
+
+  // the lead-level event: only while the lead has no booking lines
+  const leadEntry = entries.find((e) => e.lineId === null);
+  await attempt(async () => {
+    if (leadEntry) {
+      const sig = eventSig(leadEntry);
+      if (force || sig !== full.gcal_sig || !full.gcal_event_id) {
+        const eventId = await gmail.upsertCalendarEvent({ ...leadEntry, gcal_event_id: full.gcal_event_id });
+        db.prepare(`UPDATE leads SET gcal_event_id = ?, gcal_sig = ? WHERE id = ?`).run(eventId, sig, id);
       }
     } else if (full.gcal_event_id) {
       await gmail.deleteCalendarEvent(full.gcal_event_id);
-      db.prepare(`UPDATE leads SET gcal_event_id = NULL WHERE id = ?`).run(id);
+      db.prepare(`UPDATE leads SET gcal_event_id = NULL, gcal_sig = NULL WHERE id = ?`).run(id);
     }
-    return null;
-  } catch (err) {
-    return err.message;
+  });
+  // one event per booked service
+  for (const line of full.services) {
+    const entry = entries.find((e) => e.lineId === line.id);
+    await attempt(async () => {
+      if (entry) {
+        const sig = eventSig(entry);
+        if (force || sig !== line.gcal_sig || !line.gcal_event_id) {
+          const eventId = await gmail.upsertCalendarEvent({ ...entry, gcal_event_id: line.gcal_event_id });
+          db.prepare(`UPDATE lead_services SET gcal_event_id = ?, gcal_sig = ? WHERE id = ?`).run(eventId, sig, line.id);
+        }
+      } else if (line.gcal_event_id) {
+        await gmail.deleteCalendarEvent(line.gcal_event_id);
+        db.prepare(`UPDATE lead_services SET gcal_event_id = NULL, gcal_sig = NULL WHERE id = ?`).run(line.id);
+      }
+    });
+  }
+  return errors.length ? [...new Set(errors)].join('; ') : null;
+}
+
+/** Every Google Calendar event a lead owns (lead-level + per service), for deleting. */
+async function deleteLeadEvents(leadId) {
+  const ids = [
+    db.prepare(`SELECT gcal_event_id FROM leads WHERE id = ?`).get(leadId)?.gcal_event_id,
+    ...db.prepare(`SELECT gcal_event_id FROM lead_services WHERE lead_id = ?`).all(leadId).map((r) => r.gcal_event_id)
+  ].filter(Boolean);
+  for (const eventId of ids) {
+    try { await gmail.deleteCalendarEvent(eventId); } catch { /* best effort */ }
   }
 }
 
@@ -411,34 +480,58 @@ app.patch('/api/leads/:id', async (req, res) => {
   if (status !== undefined && ['new_lead', 'responded', 'new_mail'].includes(status)) {
     db.prepare(`UPDATE leads SET status = ? WHERE id = ?`).run(status, id);
   }
+  // Booking lines are updated in place so each keeps its id — and with it
+  // its own Google Calendar event. New lines come back as { key: id } so
+  // the page can tell which saved line is which.
+  const newLineIds = {};
   if (Array.isArray(services)) {
-    db.prepare(`DELETE FROM lead_services WHERE lead_id = ?`).run(id);
-    const ins = db.prepare(`
-      INSERT INTO lead_services (lead_id, name, downpayment, downpayment_paid, balance, balance_paid,
-        service_date, info, people, commission, commission_paid, provider, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const existing = new Map(db.prepare(`SELECT * FROM lead_services WHERE lead_id = ?`).all(id).map((r) => [r.id, r]));
     const txt = (v, n) => String(v ?? '').trim().slice(0, n);
+    const dateOrNull = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(v || '') ? v : null);
+    const timeOrNull = (v) => (/^\d{2}:\d{2}$/.test(v || '') ? v : null);
+    const upd = db.prepare(`
+      UPDATE lead_services SET name = ?, downpayment = ?, downpayment_paid = ?, balance = ?, balance_paid = ?,
+        service_date = ?, service_time = ?, info = ?, people = ?, commission = ?, commission_paid = ?,
+        provider = ?, notes = ? WHERE id = ?`);
+    const ins = db.prepare(`
+      INSERT INTO lead_services (name, downpayment, downpayment_paid, balance, balance_paid,
+        service_date, service_time, info, people, commission, commission_paid, provider, notes, lead_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+    const kept = new Set();
     for (const s of services) {
       if (!s || (!s.name && !s.downpayment && !s.balance && !s.commission)) continue;
-      ins.run(id, txt(s.name, 200),
-              Number(s.downpayment) || 0, s.downpayment_paid ? 1 : 0,
-              Number(s.balance) || 0, s.balance_paid ? 1 : 0,
-              /^\d{4}-\d{2}-\d{2}$/.test(s.service_date || '') ? s.service_date : null,
-              txt(s.info, 200), txt(s.people, 100),
-              Number(s.commission) || 0, s.commission_paid ? 1 : 0,
-              txt(s.provider, 200), txt(s.notes, 1000));
+      const vals = [txt(s.name, 200),
+        Number(s.downpayment) || 0, s.downpayment_paid ? 1 : 0, Number(s.balance) || 0, s.balance_paid ? 1 : 0,
+        dateOrNull(s.service_date), timeOrNull(s.service_time), txt(s.info, 200), txt(s.people, 100),
+        Number(s.commission) || 0, s.commission_paid ? 1 : 0, txt(s.provider, 200), txt(s.notes, 1000)];
+      const lineId = Number(s.id);
+      if (lineId && existing.has(lineId)) {
+        upd.run(...vals, lineId);
+        kept.add(lineId);
+      } else {
+        const info = ins.run(...vals, id);
+        if (s.key) newLineIds[String(s.key).slice(0, 40)] = Number(info.lastInsertRowid);
+      }
+    }
+    for (const [lineId, row] of existing) {
+      if (kept.has(lineId)) continue;
+      if (row.gcal_event_id) {
+        try { await gmail.deleteCalendarEvent(row.gcal_event_id); } catch { /* best effort */ }
+      }
+      db.prepare(`DELETE FROM lead_services WHERE id = ?`).run(lineId);
     }
   }
   touchLead(id);
 
+  // Calendar events carry the service, date, time, booking details, paid
+  // state and notes — any of those can change them. Events whose content
+  // didn't change aren't re-sent, so this costs nothing most of the time.
   let calendar_sync_error = null;
-  // The service name drives the event title AND whether the massage provider
-  // is invited, so a service change has to re-sync too.
-  if (booking_confirmed !== undefined || service_date !== undefined ||
-      service_time !== undefined || service !== undefined) {
-    calendar_sync_error = await syncLeadToCalendar(id);
-  }
-  res.json({ ...getLeadFull(id), calendar_sync_error });
+  const after = db.prepare(`SELECT booking_confirmed, gcal_event_id FROM leads WHERE id = ?`).get(id);
+  const hasEvents = after.gcal_event_id ||
+    db.prepare(`SELECT 1 FROM lead_services WHERE lead_id = ? AND gcal_event_id IS NOT NULL`).get(id);
+  if (after.booking_confirmed || hasEvents) calendar_sync_error = await syncLeadToCalendar(id);
+  res.json({ ...getLeadFull(id), new_line_ids: newLineIds, calendar_sync_error });
 });
 
 app.delete('/api/leads/:id', async (req, res) => {
@@ -448,9 +541,7 @@ app.delete('/api/leads/:id', async (req, res) => {
   for (const t of db.prepare(`SELECT thread_id FROM lead_threads WHERE lead_id = ?`).all(req.params.id)) {
     markThreadProcessed(t.thread_id);
   }
-  if (lead?.gcal_event_id) {
-    try { await gmail.deleteCalendarEvent(lead.gcal_event_id); } catch { /* best effort */ }
-  }
+  await deleteLeadEvents(req.params.id);
   db.prepare(`DELETE FROM leads WHERE id = ?`).run(req.params.id);
   res.json({ ok: true });
 });
@@ -716,13 +807,17 @@ app.post('/api/services/reimport', (req, res) => {
 });
 
 // ------------------------------------------------------------ calendar ----
-// Confirmed bookings within a date range, for the calendar tab.
 app.get('/api/calendar', (req, res) => {
   const { from, to } = req.query;
   if (!from || !to) return res.status(400).json({ error: 'from and to are required (YYYY-MM-DD)' });
-  const rows = db.prepare(`${LEAD_SELECT}
-    WHERE l.booking_confirmed = 1 AND l.service_date BETWEEN ? AND ?
-    ORDER BY l.service_date ASC, l.service_time ASC`).all(from, to);
+  // one entry per booked service on its own day (same rows as the Bookings tab)
+  const rows = bookingRows()
+    .filter((r) => r.date && r.date >= from && r.date <= to)
+    .sort((a, b) => a.date.localeCompare(b.date) || (a.time || '99:99').localeCompare(b.time || '99:99'))
+    .map((r) => ({
+      id: r.lead_id, booking_id: r.booking_id, client_name: r.client_name, service: r.service,
+      service_date: r.date, service_time: r.time, paid: r.lead_paid, info: r.info, people: r.people
+    }));
   res.json(rows);
 });
 
@@ -784,9 +879,7 @@ app.delete('/api/clients/:id', async (req, res) => {
     for (const t of db.prepare(`SELECT thread_id FROM lead_threads WHERE lead_id = ?`).all(l.id)) {
       markThreadProcessed(t.thread_id);
     }
-    if (l.gcal_event_id) {
-      try { await gmail.deleteCalendarEvent(l.gcal_event_id); } catch { /* best effort */ }
-    }
+    await deleteLeadEvents(l.id);
   }
   db.prepare(`DELETE FROM clients WHERE id = ?`).run(req.params.id);
   res.json({ ok: true });

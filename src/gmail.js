@@ -991,11 +991,19 @@ function addMinutesToTime(dateStr, timeStr, minutes) {
   return { date: date.toISOString().slice(0, 10), time: `${hh}:${mm}` };
 }
 
-function calendarEventBody(lead) {
+/**
+ * One calendar event: a booked service (or, for a lead with no booking
+ * lines yet, the lead itself). `lead` here is an entry built by the server
+ * with the lead's client details plus the service's own date, time, info,
+ * people and provider; `requestKey` keeps one Meet link per service.
+ */
+export function calendarEventBody(lead) {
   const lines = [
     lead.client_email ? `Client: ${lead.client_name} <${lead.client_email}>` : `Client: ${lead.client_name}`,
     lead.client_phone ? `Phone: ${lead.client_phone}` : null,
-    lead.party_size ? `Party size: ${lead.party_size}` : null,
+    lead.info ? `Info: ${lead.info}` : null,
+    lead.people ? `People: ${lead.people}` : lead.party_size ? `Party size: ${lead.party_size}` : null,
+    lead.provider ? `Provider: ${lead.provider}` : null,
     `Paid: ${lead.paid ? 'Yes' : 'No'}`,
     lead.notes ? `Notes: ${lead.notes}` : null
   ].filter(Boolean);
@@ -1012,7 +1020,7 @@ function calendarEventBody(lead) {
         attendees: [{ email: MASSAGE_PROVIDER_EMAIL }],
         conferenceData: {
           createRequest: {
-            requestId: `aqualux-massage-${lead.id}`,
+            requestId: `aqualux-massage-${lead.requestKey ?? lead.id}`,
             conferenceSolutionKey: { type: 'hangoutsMeet' }
           }
         }
@@ -1038,7 +1046,7 @@ function calendarEventBody(lead) {
   };
 }
 
-/** Create or update the Google Calendar event for a confirmed, dated lead. */
+/** Create or update one Google Calendar event (see calendarEventBody). */
 export async function upsertCalendarEvent(lead) {
   if (!hasCalendarScope()) throw new Error('Google Calendar isn\'t connected — reconnect Gmail in Settings to grant calendar access');
   const body = calendarEventBody(lead);
@@ -1060,11 +1068,15 @@ export async function upsertCalendarEvent(lead) {
   return created.id;
 }
 
-/** Remove a lead's event from Google Calendar (booking un-confirmed/deleted). */
+/**
+ * Remove an event from Google Calendar (booking un-confirmed, service
+ * removed, lead deleted). Guests — the massage provider — are told it's
+ * cancelled rather than left with a booking that no longer exists.
+ */
 export async function deleteCalendarEvent(eventId) {
   if (!eventId || !hasCalendarScope()) return;
   try {
-    await calApiRequest(`/calendars/primary/events/${eventId}`, { method: 'DELETE' });
+    await calApiRequest(`/calendars/primary/events/${eventId}?sendUpdates=all`, { method: 'DELETE' });
   } catch (err) {
     if (!/not found|404|410/i.test(err.message)) throw err;
   }
