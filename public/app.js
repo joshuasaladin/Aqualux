@@ -1151,6 +1151,181 @@ $('#client-search').addEventListener('input', () => {
   clearTimeout(clientTimer); clientTimer = setTimeout(loadClients, 250);
 });
 
+/* --------------------------------------------------- rich-text replies --- */
+// The reply box is a small formatted editor: bold, italic, bullet and
+// numbered lists. Anything pasted in (ChatGPT, Word, a website, Google Docs)
+// is cleaned down to just those, so the formatting survives but stray fonts,
+// colours and sizes don't end up in a client's email.
+
+const escText = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+/** Plain text -> HTML, keeping line breaks. */
+const textToHtml = (t) => escText(t).replace(/\r?\n/g, '<br>');
+
+/** Keep only bold / italic / underline / lists / paragraphs / line breaks / links. */
+function sanitizeHtml(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const out = document.createElement('div');
+  const DROP = /^(SCRIPT|STYLE|META|LINK|TITLE|HEAD|NOSCRIPT|TEMPLATE|SVG|BUTTON|IMG|VIDEO|AUDIO|IFRAME|OBJECT|INPUT|SELECT|TEXTAREA|COLGROUP)$/;
+  const BLOCK = /^(DIV|SECTION|ARTICLE|BLOCKQUOTE|HEADER|FOOTER|MAIN|ASIDE|FIGURE|TABLE|TBODY|THEAD|TFOOT|DL|DT|DD|ADDRESS|CENTER)$/;
+  function walk(node, parent, inPre) {
+    for (const ch of [...node.childNodes]) {
+      if (ch.nodeType === Node.TEXT_NODE) {
+        const t = ch.textContent;
+        if (!inPre) { parent.appendChild(document.createTextNode(t)); continue; }
+        t.split('\n').forEach((part, i) => {
+          if (i) parent.appendChild(document.createElement('br'));
+          if (part) parent.appendChild(document.createTextNode(part));
+        });
+        continue;
+      }
+      if (ch.nodeType !== Node.ELEMENT_NODE) continue;
+      const tag = ch.tagName;
+      if (DROP.test(tag)) continue;
+      const style = (ch.getAttribute('style') || '').toLowerCase();
+      const boldStyle = /font-weight\s*:\s*(bold|[6-9]00)/.test(style);
+      const normalWeight = /font-weight\s*:\s*(normal|[1-4]00)/.test(style);
+      const italicStyle = /font-style\s*:\s*italic/.test(style);
+      let el = null;
+      if ((tag === 'B' || tag === 'STRONG') && !normalWeight) el = document.createElement('b'); // Google Docs wraps everything in <b style="font-weight:normal">
+      else if (tag === 'I' || tag === 'EM') el = document.createElement('i');
+      else if (tag === 'U') el = document.createElement('u');
+      else if (tag === 'P' && parent.tagName === 'LI') {
+        // ChatGPT puts each list item's text in a <p>; unwrap it so bullets
+        // don't get paragraph gaps between them
+        if (parent.childNodes.length) parent.appendChild(document.createElement('br'));
+        walk(ch, parent, inPre); continue;
+      }
+      else if (tag === 'UL' || tag === 'OL' || tag === 'LI' || tag === 'P') el = document.createElement(tag.toLowerCase());
+      else if (tag === 'BR') { parent.appendChild(document.createElement('br')); continue; }
+      else if (tag === 'HR') { parent.appendChild(document.createElement('br')); continue; }
+      else if (/^H[1-6]$/.test(tag)) {             // headings become a bold line
+        const p = document.createElement('p'); const b = document.createElement('b');
+        p.appendChild(b); walk(ch, b, inPre); parent.appendChild(p); continue;
+      }
+      else if (tag === 'PRE') { const d = document.createElement('div'); walk(ch, d, true); parent.appendChild(d); continue; }
+      else if (tag === 'TR') { const d = document.createElement('div'); walk(ch, d, inPre); parent.appendChild(d); continue; }
+      else if (tag === 'TD' || tag === 'TH') {
+        if (ch.previousElementSibling) parent.appendChild(document.createTextNode(' | '));
+        walk(ch, parent, inPre); continue;
+      }
+      else if (BLOCK.test(tag)) el = document.createElement('div');
+      else if (tag === 'A') {
+        const href = ch.getAttribute('href') || '';
+        if (/^(https?:|mailto:|tel:)/i.test(href)) { el = document.createElement('a'); el.setAttribute('href', href); }
+      }
+      // spans and anything else: keep the text, plus bold/italic set by style
+      let target = parent;
+      if (el) { parent.appendChild(el); target = el; }
+      if (boldStyle && !el) { const b = document.createElement('b'); target.appendChild(b); target = b; }
+      if (italicStyle && !(el && el.tagName === 'I')) { const i = document.createElement('i'); target.appendChild(i); target = i; }
+      walk(ch, target, inPre);
+    }
+  }
+  walk(doc.body, out, false);
+  // drop empty formatting shells left behind
+  out.querySelectorAll('b, i, u, a').forEach((e) => { if (!e.textContent && !e.querySelector('br')) e.remove(); });
+  return out.innerHTML.trim();
+}
+
+/** Does plain text look like Markdown (what ChatGPT's copy button gives)? */
+const looksLikeMarkdown = (t) =>
+  /^\s*([-*+•]|\d+[.)])\s+\S/m.test(t) || /\*\*[^*\n]+\*\*/.test(t) || /^#{1,6}\s+\S/m.test(t);
+
+/** Markdown -> HTML: headings, bullet/numbered lists (nested), bold, italic, links. */
+function markdownToHtml(md) {
+  const inline = (t) => escText(t)
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, (m, a, b) => `<b>${a || b}</b>`)
+    .replace(/(^|[\s(])\*([^*\s][^*]*?)\*(?=[\s).,!?:;]|$)/g, '$1<i>$2</i>')
+    .replace(/(^|[\s(])_([^_\s][^_]*?)_(?=[\s).,!?:;]|$)/g, '$1<i>$2</i>')
+    .replace(/`([^`]+)`/g, '$1');
+  const lines = md.replace(/\r\n?/g, '\n').split('\n');
+  let html = '', para = [], inCode = false;
+  const stack = []; // open lists: { type: 'ul'|'ol', indent }
+  const flushPara = () => { if (para.length) { html += `<p>${para.join('<br>')}</p>`; para = []; } };
+  const closeLists = (toIndent = -1) => {
+    while (stack.length && stack[stack.length - 1].indent > toIndent) html += `</li></${stack.pop().type}>`;
+  };
+  for (const raw of lines) {
+    if (/^\s*```/.test(raw)) { inCode = !inCode; continue; }
+    if (inCode) { flushPara(); closeLists(); html += `<div>${escText(raw) || '<br>'}</div>`; continue; }
+    if (/^\s*$/.test(raw)) { flushPara(); continue; }
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(raw)) { flushPara(); closeLists(); continue; } // --- rule
+    if (/^\s*\|?\s*:?-{3,}/.test(raw) && raw.includes('|')) continue;                   // table divider
+    const item = raw.match(/^(\s*)([-*+•]|\d+[.)])\s+(.*)$/);
+    if (item) {
+      flushPara();
+      const indent = item[1].replace(/\t/g, '    ').length;
+      const type = /\d/.test(item[2]) ? 'ol' : 'ul';
+      const top = stack[stack.length - 1];
+      if (!top || indent > top.indent) {
+        html += `<${type}><li>`; stack.push({ type, indent });
+      } else {
+        closeLists(indent);
+        const cur = stack[stack.length - 1];
+        if (cur && cur.indent === indent && cur.type === type) html += '</li><li>';
+        else { if (cur && cur.indent === indent) html += `</li></${stack.pop().type}>`; html += `<${type}><li>`; stack.push({ type, indent }); }
+      }
+      html += inline(item[3]);
+      continue;
+    }
+    const heading = raw.match(/^\s*#{1,6}\s+(.*)$/);
+    if (heading) { flushPara(); closeLists(); html += `<p><b>${inline(heading[1])}</b></p>`; continue; }
+    if (stack.length && /^\s{2,}\S/.test(raw)) { html += '<br>' + inline(raw.trim()); continue; } // continuation of a list item
+    closeLists();
+    const cells = raw.trim().startsWith('|') ? raw.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim()).join(' | ') : null;
+    para.push(inline(cells ?? raw.trim()));
+  }
+  flushPara(); closeLists();
+  return html;
+}
+
+/** Formatted HTML -> plain text, for the plain-text copy of the email and the thread view. */
+function htmlToText(html) {
+  const root = new DOMParser().parseFromString(`<div>${html}</div>`, 'text/html').body.firstChild;
+  let out = '';
+  // a new line — but not straight after a fresh "• " / "1. " marker
+  const nl = () => { if (out && !out.endsWith('\n') && !/(• |\d+\. )$/.test(out)) out += '\n'; };
+  function walk(node, depth, inLi = false) {
+    for (const ch of node.childNodes) {
+      if (ch.nodeType === Node.TEXT_NODE) { out += ch.textContent.replace(/\s+/g, ' '); continue; }
+      if (ch.nodeType !== Node.ELEMENT_NODE) continue;
+      const tag = ch.tagName;
+      if (tag === 'BR') { out += '\n'; continue; }
+      if (tag === 'UL' || tag === 'OL') {
+        nl();
+        let n = 0;
+        for (const li of ch.children) {
+          if (li.tagName !== 'LI') continue;
+          nl();
+          out += '   '.repeat(depth) + (tag === 'OL' ? `${++n}. ` : '• ');
+          walk(li, depth + 1, true);
+        }
+        nl();
+        continue;
+      }
+      const block = /^(P|DIV|LI|H[1-6]|BLOCKQUOTE|TR)$/.test(tag);
+      if (block) nl();
+      walk(ch, depth, inLi);
+      if (block) { nl(); if (tag === 'P' && !inLi) out += '\n'; }
+    }
+  }
+  walk(root, 0);
+  return out.split('\n').map((line) => line.replace(/[ \t]+$/, '').replace(/^ (?=\S)/, '')).join('\n')
+    .replace(/\n{3,}/g, '\n\n').trim();
+}
+
+/** What a paste turns into: cleaned HTML if the clipboard has it, else converted Markdown or plain text. */
+function pastedHtml(clipboard) {
+  const html = clipboard.getData('text/html');
+  const text = clipboard.getData('text/plain');
+  if (html && html.trim()) {
+    const clean = sanitizeHtml(html);
+    if (clean.replace(/<[^>]+>/g, '').trim()) return clean;
+  }
+  return looksLikeMarkdown(text) ? markdownToHtml(text) : textToHtml(text);
+}
+
 /* --------------------------------------------------------- lead drawer --- */
 /**
  * wa.me link for a phone number however it was typed. Numbers with a +/00
@@ -1300,7 +1475,14 @@ async function openLead(id) {
                  placeholder="Add people to copy in — separate with commas" value="${esc(l.reply_cc || '')}" ${canEmail ? '' : 'disabled'}>
         </div>
         <div class="cc-suggest" id="d-cc-suggest"></div>
-        <textarea id="d-reply" placeholder="Write your reply — it sends from your Gmail…" ${canEmail ? '' : 'disabled'}>${esc(l.draft_reply || '')}</textarea>
+        <div class="rt-toolbar" id="d-rt-toolbar">
+          <button type="button" data-cmd="bold" title="Bold (Ctrl+B)" ${canEmail ? '' : 'disabled'}><b>B</b></button>
+          <button type="button" data-cmd="italic" title="Italic (Ctrl+I)" ${canEmail ? '' : 'disabled'}><i>I</i></button>
+          <button type="button" data-cmd="insertUnorderedList" title="Bullet points" ${canEmail ? '' : 'disabled'}>• List</button>
+          <button type="button" data-cmd="insertOrderedList" title="Numbered points" ${canEmail ? '' : 'disabled'}>1. List</button>
+        </div>
+        <div id="d-reply" class="rt-editor" contenteditable="${canEmail ? 'true' : 'false'}" role="textbox" aria-multiline="true"
+             data-placeholder="Write your reply — it sends from your Gmail…"></div>
         <div id="d-file-list" class="file-list"></div>
         <div class="reply-actions">
           <button class="btn btn-primary" id="d-send" ${canEmail ? '' : 'disabled'}>Send reply ✉️</button>
@@ -1520,13 +1702,69 @@ async function openLead(id) {
     });
   }
 
-  // --- auto-expanding reply box ---
+  // --- formatted reply box ---
   const replyBox = $('#d-reply');
-  function autoGrow() {
-    replyBox.style.height = 'auto';
-    replyBox.style.height = Math.min(replyBox.scrollHeight + 2, 420) + 'px';
+  // a saved draft comes back formatted; one saved before formatting existed is plain text
+  replyBox.innerHTML = l.draft_html ? sanitizeHtml(l.draft_html) : textToHtml(l.draft_reply || '');
+  const replyHtml = () => sanitizeHtml(replyBox.innerHTML);
+  const replyText = () => htmlToText(replyBox.innerHTML);
+  const markEmpty = () => replyBox.classList.toggle('is-empty', !replyText() && !replyBox.querySelector('li'));
+  markEmpty();
+  try { document.execCommand('styleWithCSS', false, false); } catch { /* <b>/<i> rather than inline styles */ }
+
+  // remember where the cursor was, so toolbar buttons and templates (which
+  // take focus away from the box) act on the right spot
+  let savedRange = null;
+  const rememberRange = () => {
+    const sel = window.getSelection();
+    if (sel.rangeCount && replyBox.contains(sel.getRangeAt(0).commonAncestorContainer)) savedRange = sel.getRangeAt(0).cloneRange();
+  };
+  const restoreRange = () => {
+    replyBox.focus();
+    if (!savedRange) return;
+    const sel = window.getSelection();
+    sel.removeAllRanges(); sel.addRange(savedRange);
+  };
+  const toolbar = $('#d-rt-toolbar');
+  const refreshToolbar = () => toolbar.querySelectorAll('[data-cmd]').forEach((b) => {
+    let on = false;
+    try { on = document.queryCommandState(b.dataset.cmd); } catch { /* unsupported */ }
+    b.classList.toggle('active', on && replyBox.contains(document.activeElement || replyBox));
+  });
+  document.addEventListener('selectionchange', () => {
+    if (!document.body.contains(replyBox)) return;
+    rememberRange();
+    if (document.activeElement === replyBox) refreshToolbar();
+  });
+  toolbar.querySelectorAll('[data-cmd]').forEach((btn) => {
+    btn.addEventListener('mousedown', (e) => e.preventDefault()); // keep the text selected
+    btn.addEventListener('click', () => {
+      restoreRange();
+      document.execCommand(btn.dataset.cmd, false, null);
+      rememberRange(); refreshToolbar(); markEmpty();
+      replyBox.dispatchEvent(new Event('input'));
+    });
+  });
+  // pasting keeps bullets, numbering, bold and italics (from ChatGPT, Word,
+  // websites…) but nothing else — no foreign fonts, colours or sizes
+  replyBox.addEventListener('paste', (e) => {
+    if (!e.clipboardData) return;
+    e.preventDefault();
+    let html = pastedHtml(e.clipboardData);
+    // pasted text that ends in a list: leave the cursor on a fresh line
+    // below it, not stuck inside the last bullet
+    const inList = ['insertUnorderedList', 'insertOrderedList'].some((c) => {
+      try { return document.queryCommandState(c); } catch { return false; }
+    });
+    if (!inList && /<\/(ul|ol)>\s*$/.test(html)) html += '<p><br></p>';
+    document.execCommand('insertHTML', false, html);
+  });
+  function insertAtCursor(html) {
+    if (!replyText()) { replyBox.innerHTML = html; replyBox.focus(); }
+    else { restoreRange(); document.execCommand('insertHTML', false, html); }
+    markEmpty();
+    replyBox.dispatchEvent(new Event('input'));
   }
-  autoGrow(); // size correctly right away if a draft was restored
 
   // --- draft autosave: survives closing the tab, reloading, or coming
   // back on another device — saved to the server, not just this browser ---
@@ -1537,13 +1775,15 @@ async function openLead(id) {
     if (!draftDirty) return;
     draftDirty = false;
     try {
-      await api(`/leads/${id}/draft`, { method: 'PATCH', body: JSON.stringify({ draft: replyBox.value }) });
-      draftStatus.textContent = replyBox.value.trim() ? 'Draft saved ✓' : '';
+      const text = replyText();
+      await api(`/leads/${id}/draft`, { method: 'PATCH',
+        body: JSON.stringify({ draft: text, draft_html: text ? replyHtml() : '' }) });
+      draftStatus.textContent = text ? 'Draft saved ✓' : '';
       setTimeout(() => { if (draftStatus.textContent === 'Draft saved ✓') draftStatus.textContent = ''; }, 2000);
     } catch { /* best effort — try again on the next edit */ }
   }
   replyBox.addEventListener('input', () => {
-    autoGrow();
+    markEmpty();
     draftDirty = true;
     clearTimeout(draftTimer);
     draftTimer = setTimeout(saveDraftNow, 800);
@@ -1584,15 +1824,9 @@ async function openLead(id) {
     const t = templates[Number(e.target.value)];
     e.target.value = '';
     if (!t) return;
+    // templates can use the same "- " bullets and **bold** as ChatGPT
     const text = fillTemplate(t.body, l);
-    if (!replyBox.value.trim()) replyBox.value = text;
-    else {
-      const at = replyBox.selectionStart ?? replyBox.value.length;
-      replyBox.value = replyBox.value.slice(0, at) + text + replyBox.value.slice(at);
-    }
-    autoGrow();
-    replyBox.focus();
-    draftDirty = true;
+    insertAtCursor(looksLikeMarkdown(text) ? markdownToHtml(text) : textToHtml(text));
     saveDraftNow();
   });
 
@@ -1631,7 +1865,7 @@ async function openLead(id) {
   });
 
   $('#d-send').addEventListener('click', async () => {
-    const body = $('#d-reply').value.trim();
+    const body = replyText();
     if (!body && !pendingFiles.length) return;
     const st = $('#d-send-status');
     $('#d-send').disabled = true;
@@ -1642,6 +1876,7 @@ async function openLead(id) {
         method: 'POST',
         body: JSON.stringify({
           body,
+          html: body ? replyHtml() : '',
           cc: $('#d-cc').value,
           attachments: pendingFiles.map(({ filename, mimeType, data }) => ({ filename, mimeType, data }))
         })

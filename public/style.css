@@ -346,6 +346,27 @@ button.gmail-attach-chip:hover { background: #d3eff6; }
    (not hidden) so text past that cap scrolls within the box instead of
    just vanishing off the bottom */
 .reply-box textarea { min-height: 74px; resize: none; overflow-y: auto; }
+/* formatted reply editor + its B / I / list buttons */
+.rt-toolbar { display: flex; gap: 4px; margin-bottom: -4px; }
+.rt-toolbar button {
+  border: 1px solid var(--border); background: #fff; color: var(--text); border-radius: 6px;
+  min-width: 34px; height: 30px; padding: 0 9px; font: inherit; font-size: .85rem; cursor: pointer;
+}
+.rt-toolbar button:hover { border-color: var(--aqua); color: var(--aqua-dark); }
+.rt-toolbar button.active { background: #e5f6fa; border-color: var(--aqua); color: var(--aqua-dark); }
+.rt-toolbar button[disabled] { opacity: .5; cursor: not-allowed; }
+.rt-editor {
+  border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; background: #fff;
+  min-height: 96px; max-height: 420px; overflow-y: auto; font-size: .92rem; line-height: 1.5;
+  overflow-wrap: anywhere; cursor: text;
+}
+.rt-editor:focus { outline: 2px solid var(--aqua); outline-offset: -1px; }
+.rt-editor[contenteditable="false"] { background: #f6f8fa; cursor: not-allowed; }
+.rt-editor.is-empty::before { content: attr(data-placeholder); color: #98a6b3; pointer-events: none; }
+.rt-editor p { margin: 0 0 .6em; }
+.rt-editor ul, .rt-editor ol { margin: .3em 0 .6em; padding-left: 1.6em; }
+.rt-editor li { margin: .15em 0; }
+.rt-editor a { color: var(--aqua-dark); }
 .reply-actions { display: flex; align-items: center; gap: 10px; }
 .template-pick { width: auto; max-width: 220px; }
 .tpl-list { display: flex; flex-direction: column; gap: 12px; }

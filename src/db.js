@@ -241,6 +241,7 @@ ensureColumn('lead_services', 'gcal_event_id', 'gcal_event_id TEXT');
 ensureColumn('lead_services', 'gcal_sig', 'gcal_sig TEXT');
 ensureColumn('leads', 'gcal_sig', 'gcal_sig TEXT');
 ensureColumn('leads', 'reply_cc', `reply_cc TEXT DEFAULT ''`);
+ensureColumn('leads', 'draft_html', `draft_html TEXT DEFAULT ''`);
 ensureColumn('leads', 'archived', 'archived INTEGER NOT NULL DEFAULT 0');
 ensureColumn('messages', 'from_name', `from_name TEXT DEFAULT ''`);
 ensureColumn('messages', 'to_emails', `to_emails TEXT DEFAULT ''`);

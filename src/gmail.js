@@ -838,7 +838,7 @@ export function parseCcList(raw) {
   return { valid, invalid };
 }
 
-export async function sendReply(lead, client, bodyText, attachments = [], cc = []) {
+export async function sendReply(lead, client, bodyText, attachments = [], cc = [], bodyHtml = '') {
   const myEmail = getSetting('gmail_email');
   if (!myEmail) throw new Error('Gmail is not connected');
   // never Cc the client (already in To) or ourselves
@@ -865,41 +865,48 @@ export async function sendReply(lead, client, bodyText, attachments = [], cc = [
   }
 
   const fold = (s) => s.replace(/.{76}/g, '$&\r\n');
+  const b64 = (str) => Buffer.from(str, 'utf8').toString('base64');
+  const escHtml = (str) => str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const sigImage = getSetting('signature_image'); // { data, mimeType, filename }
 
-  // Build the message content: with a signature image the email is HTML with
-  // the image embedded inline; otherwise plain text with the text signature.
-  let core; // { type: content-type header value, extra: [], content: string }
+  // Text signature goes on unless an image signature replaces it, or the
+  // message already contains it (typed or pasted in by hand).
+  const signature = getSetting('email_signature', DEFAULT_SIGNATURE) || '';
+  const sigLines = signature.split('\n').map((l) => l.trim()).filter((l) => l.length > 3);
+  const alreadyHasSig = sigLines.some((l) => bodyText.includes(l));
+  const textSig = !sigImage?.data && signature.trim() && !alreadyHasSig ? signature : '';
+
+  // Every email goes out as HTML (bold, italics, lists from the reply box)
+  // plus a plain-text copy for mail apps that don't show formatting.
+  const plain = textSig ? `${bodyText}\n\n${textSig}` : bodyText;
+  const html =
+    `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5">` +
+    (bodyHtml || `<div style="white-space:pre-wrap">${escHtml(bodyText)}</div>`) +
+    (textSig ? `<br><div style="white-space:pre-wrap">${escHtml(textSig)}</div>` : '') +
+    `</div>` +
+    (sigImage?.data
+      ? `<br><img src="cid:aqualuxsig" alt="Aqua Lux Aruba — Concierge & Guest services" style="max-width:420px;height:auto">`
+      : '');
+  let htmlPart = `Content-Type: text/html; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n${fold(b64(html))}\r\n`;
   if (sigImage?.data) {
-    const escHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const html =
-      `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;white-space:pre-wrap">${escHtml(bodyText)}</div>` +
-      `<br><img src="cid:aqualuxsig" alt="Aqua Lux Aruba — Concierge & Guest services" style="max-width:420px;height:auto">`;
+    // the signature image travels inside the message, shown inline
     const rel = 'related_' + crypto.randomBytes(8).toString('hex');
-    core = {
-      type: `multipart/related; boundary="${rel}"`,
-      extra: [],
-      content:
-        `--${rel}\r\nContent-Type: text/html; charset="UTF-8"\r\n` +
-        `Content-Transfer-Encoding: base64\r\n\r\n${fold(Buffer.from(html, 'utf8').toString('base64'))}\r\n` +
-        `--${rel}\r\nContent-Type: ${sigImage.mimeType}\r\n` +
-        `Content-Transfer-Encoding: base64\r\n` +
-        `Content-ID: <aqualuxsig>\r\n` +
-        `Content-Disposition: inline; filename="signature"\r\n\r\n${fold(sigImage.data)}\r\n--${rel}--\r\n`
-    };
-  } else {
-    // Append the text signature unless the message already contains it —
-    // e.g. inserted with the "Footer" button and possibly edited.
-    const signature = getSetting('email_signature', DEFAULT_SIGNATURE) || '';
-    const sigLines = signature.split('\n').map((l) => l.trim()).filter((l) => l.length > 3);
-    const alreadyHasSig = sigLines.some((l) => bodyText.includes(l));
-    const fullBody = signature.trim() && !alreadyHasSig ? `${bodyText}\n\n${signature}` : bodyText;
-    core = {
-      type: 'text/plain; charset="UTF-8"',
-      extra: ['Content-Transfer-Encoding: base64'],
-      content: fold(Buffer.from(fullBody, 'utf8').toString('base64'))
-    };
+    htmlPart =
+      `Content-Type: multipart/related; boundary="${rel}"\r\n\r\n` +
+      `--${rel}\r\n${htmlPart}` +
+      `--${rel}\r\nContent-Type: ${sigImage.mimeType}\r\nContent-Transfer-Encoding: base64\r\n` +
+      `Content-ID: <aqualuxsig>\r\nContent-Disposition: inline; filename="signature"\r\n\r\n${fold(sigImage.data)}\r\n` +
+      `--${rel}--\r\n`;
   }
+  const alt = 'alt_' + crypto.randomBytes(8).toString('hex');
+  const core = {
+    type: `multipart/alternative; boundary="${alt}"`,
+    extra: [],
+    content:
+      `--${alt}\r\nContent-Type: text/plain; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n${fold(b64(plain))}\r\n` +
+      `--${alt}\r\n${htmlPart}` +
+      `--${alt}--\r\n`
+  };
 
   let rfc822;
   if (attachments.length) {

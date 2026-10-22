@@ -578,7 +578,7 @@ app.get('/api/attachments/:id', async (req, res) => {
 
 // --------------------------------------------------------------- reply ----
 app.post('/api/leads/:id/reply', async (req, res) => {
-  const { body, attachments = [], cc = '' } = req.body || {};
+  const { body, attachments = [], cc = '', html = '' } = req.body || {};
   if (!body?.trim() && !attachments.length) {
     return res.status(400).json({ error: 'Message body is required' });
   }
@@ -611,10 +611,10 @@ app.post('/api/leads/:id/reply', async (req, res) => {
     return res.status(400).json({ error: 'Attachments too large — keep the total under 25 MB (Gmail\'s own limit)' });
   }
   try {
-    await gmail.sendReply(lead, client, (body || '').trim(), files, ccList.valid);
+    await gmail.sendReply(lead, client, (body || '').trim(), files, ccList.valid, String(html || '').slice(0, 500000));
     // The draft became a real sent message — nothing left to keep. The Cc
     // list is kept: the same people usually stay copied on the next reply.
-    db.prepare(`UPDATE leads SET draft_reply = '', reply_cc = ? WHERE id = ?`)
+    db.prepare(`UPDATE leads SET draft_reply = '', draft_html = '', reply_cc = ? WHERE id = ?`)
       .run(ccList.valid.join(', '), lead.id);
     res.json(getLeadFull(lead.id));
   } catch (err) {
@@ -630,6 +630,10 @@ app.patch('/api/leads/:id/draft', (req, res) => {
   if (req.body?.draft !== undefined) {
     const draft = String(req.body.draft).slice(0, 20000);
     db.prepare(`UPDATE leads SET draft_reply = ? WHERE id = ?`).run(draft, req.params.id);
+  }
+  // the formatted version (bold, lists…) of the same draft
+  if (req.body?.draft_html !== undefined) {
+    db.prepare(`UPDATE leads SET draft_html = ? WHERE id = ?`).run(String(req.body.draft_html).slice(0, 200000), req.params.id);
   }
   if (req.body?.cc !== undefined) {
     db.prepare(`UPDATE leads SET reply_cc = ? WHERE id = ?`).run(String(req.body.cc).slice(0, 1000), req.params.id);
