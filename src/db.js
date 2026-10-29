@@ -240,6 +240,21 @@ ensureColumn('lead_services', 'gcal_event_id', 'gcal_event_id TEXT');
 // fingerprint of what was last sent to Google, so unchanged events aren't re-sent
 ensureColumn('lead_services', 'gcal_sig', 'gcal_sig TEXT');
 ensureColumn('leads', 'gcal_sig', 'gcal_sig TEXT');
+// Each booked service is confirmed on its own; a lead counts as confirmed
+// when any of its services is. Start time also lives on the service now.
+// One-time move, the first time this runs: services of already-confirmed
+// leads start out confirmed, and take the lead's start time where it
+// applied to them (same day, or no day of their own).
+if (!hasColumn('lead_services', 'confirmed')) {
+  ensureColumn('lead_services', 'confirmed', 'confirmed INTEGER NOT NULL DEFAULT 0');
+  db.exec(`UPDATE lead_services SET confirmed = 1
+           WHERE lead_id IN (SELECT id FROM leads WHERE booking_confirmed = 1)`);
+  db.exec(`UPDATE lead_services SET service_time =
+             (SELECT l.service_time FROM leads l WHERE l.id = lead_services.lead_id)
+           WHERE service_time IS NULL
+             AND (service_date IS NULL OR service_date =
+                  (SELECT l.service_date FROM leads l WHERE l.id = lead_services.lead_id))`);
+}
 ensureColumn('leads', 'reply_cc', `reply_cc TEXT DEFAULT ''`);
 ensureColumn('leads', 'draft_html', `draft_html TEXT DEFAULT ''`);
 ensureColumn('leads', 'archived', 'archived INTEGER NOT NULL DEFAULT 0');

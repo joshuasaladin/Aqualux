@@ -388,14 +388,14 @@ function refreshCurrentView() { showView(currentView); }
 /* -------------------------------------------------------------- leads --- */
 function leadCard(l) {
   // paid + confirmed fades out — but never while the client is waiting on a reply
-  const done = l.paid && l.booking_confirmed && l.status === 'responded';
+  const done = false;
   const total = l.services_total || l.price || 0;
   const owed = l.services_total ? l.services_owed : 0;
   return `
   <div class="card ${done ? 'done' : ''}" data-lead="${l.id}">
     <div class="card-top">
       <span class="card-title">${esc(l.client_name)}</span>
-      ${statusBadge(l.status)} ${payBadge(l.paid, owed)} ${bookBadge(l.booking_confirmed)}
+      ${statusBadge(l.status)} ${bookBadge(l.booking_confirmed)}
       ${l.merged_count > 1 ? `<span class="badge multi">📨 ${l.merged_count} submissions</span>` : ''}
       <span class="card-right">
         ${total ? `<span class="card-amount">${money(total)}${l.services_commission > 0 ?
@@ -643,8 +643,8 @@ async function renderCalendar() {
     // service, which is what tells two bookings apart at a glance in a
     // column only a few characters wide.
     let evts = list.slice(0, maxChips).map((e) => `
-      <div class="cal-evt ${e.paid ? '' : 'unpaid'}" data-lead="${e.id}"
-           title="${e.service_time ? fmtTime(e.service_time) + ' — ' : ''}${esc(e.client_name)} — ${esc(e.service)}${e.paid ? '' : ' (unpaid)'}">
+      <div class="cal-evt" data-lead="${e.id}"
+           title="${e.service_time ? fmtTime(e.service_time) + ' — ' : ''}${esc(e.client_name)} — ${esc(e.service)}">
         ${e.service_time ? `<b class="evt-time">${fmtTime(e.service_time)}</b> ` : ''}<span
           class="evt-who">${esc(e.client_name.split(' ')[0])}: </span>${esc(e.service)}
       </div>`).join('');
@@ -697,7 +697,7 @@ async function openDayView(dateStr) {
 }
 
 function dayEventHtml(e, extra = '', style = '') {
-  return `<div class="day-evt ${e.paid ? '' : 'unpaid'} ${extra}" data-lead="${e.id}" style="${style}">
+  return `<div class="day-evt ${extra}" data-lead="${e.id}" style="${style}">
     ${e.service_time ? `<b>${fmtTime(e.service_time)}</b> ` : ''}${esc(e.service || 'Booking')}
     <span class="day-evt-who">${esc(e.client_name)}</span>
   </div>`;
@@ -1438,21 +1438,10 @@ async function openLead(id) {
         <label>Service requested<input id="d-service" value="${esc(l.service)}"></label>
         <label>How many people<input id="d-party" type="number" min="1" step="1" value="${l.party_size || ''}"></label>
       </div>
-      <label>Client phone / WhatsApp<input id="d-phone" type="tel" value="${esc(l.client_phone || '')}"></label>
       <div class="form-row">
         <label>Service date<input id="d-date" type="date" value="${l.service_date || ''}"></label>
-        <label>Start time<input id="d-time" type="time" value="${l.service_time || ''}"></label>
+        <label>Notes<input id="d-notes" value="${esc(l.notes)}"></label>
       </div>
-      <label>Notes<input id="d-notes" value="${esc(l.notes)}"></label>
-      <div class="toggle-row">
-        <label class="toggle ${l.paid ? 'on-paid' : ''}">
-          <input type="checkbox" id="d-paid" ${l.paid ? 'checked' : ''}> Paid ${l.paid ? '✓' : ''}
-        </label>
-        <label class="toggle ${l.booking_confirmed ? 'on-confirmed' : ''}">
-          <input type="checkbox" id="d-confirmed" ${l.booking_confirmed ? 'checked' : ''}> Booking confirmed ${l.booking_confirmed ? '✓' : ''}
-        </label>
-      </div>
-      <div class="gcal-badge ${l.gcal_event_id ? '' : 'hidden'}" id="d-gcal">🗓️ Synced to Google Calendar (yellow)</div>
       <span class="send-status autosave-status" id="d-save-status"></span>
     </div>
 
@@ -1544,6 +1533,11 @@ async function openLead(id) {
         <label>People / type<input class="svc-people" value="${esc(s.people || '')}"></label>
       </div>
       <div class="bk-edit-grid bk-money">
+        <label class="toggle bk-confirm ${s.confirmed ? 'on-confirmed' : ''}">
+          <input type="checkbox" class="svc-confirmed" ${s.confirmed ? 'checked' : ''}>
+          <span class="bk-confirm-text">${s.confirmed ? 'Booking confirmed ✓' : 'Booking confirmed'}</span>
+          <span class="bk-gcal ${s.gcal_event_id ? '' : 'hidden'}" title="On Google Calendar">🗓️</span>
+        </label>
         <label>Price (total)<input class="svc-price" type="number" min="0" step="0.01" placeholder="0" value="${price || ''}"></label>
         <label>Our commission<input class="svc-comm" type="number" min="0" step="0.01" placeholder="0" value="${num(s.commission) || ''}">
           <span class="mini-check"><input type="checkbox" class="svc-comm-paid" ${s.commission_paid ? 'checked' : ''}> received</span>
@@ -1555,6 +1549,14 @@ async function openLead(id) {
         <button class="btn btn-sm btn-danger svc-del" title="Remove this service">Remove</button>
       </div>`;
     row.querySelector('.svc-del').addEventListener('click', () => { row.remove(); updateTotals(); scheduleLeadSave(0); });
+    // the switch shows its state straight away (the save follows on its own)
+    const conf = row.querySelector('.svc-confirmed');
+    conf.addEventListener('change', () => {
+      conf.closest('label').classList.toggle('on-confirmed', conf.checked);
+      row.querySelector('.bk-confirm-text').textContent = conf.checked ? 'Booking confirmed ✓' : 'Booking confirmed';
+    });
+    // guest-paid state isn't edited here any more; keep whatever was stored
+    row.dataset.paid = s.balance_paid ? '1' : '';
     row.querySelectorAll('input').forEach((i) => i.addEventListener('input', () => {
       // commission % from the Services book (e.g. "15%"), filled in only
       // while the commission box is still empty — never over a typed amount
@@ -1579,9 +1581,9 @@ async function openLead(id) {
   }
   function collectServices() {
     return [...svcRows.querySelectorAll('.bk-edit')].map((r) => {
-      // the whole price is stored as one amount, paid or not with the lead
+      // the whole price is stored as one amount
       const price = num(r.querySelector('.svc-price').value);
-      const paid = $('#d-paid').checked;
+      const paid = !!r.dataset.paid;
       return {
         id: r.dataset.id ? Number(r.dataset.id) : undefined,
         key: r.dataset.id ? undefined : r.dataset.key,
@@ -1596,6 +1598,7 @@ async function openLead(id) {
         balance_paid: paid,
         commission: num(r.querySelector('.svc-comm').value),
         commission_paid: r.querySelector('.svc-comm-paid').checked,
+        confirmed: r.querySelector('.svc-confirmed').checked,
         provider: r.querySelector('.svc-provider').value,
         notes: r.querySelector('.svc-notes').value
       };
@@ -1611,6 +1614,7 @@ async function openLead(id) {
   }
   if (l.services.length) l.services.forEach(addServiceRow);
   else addServiceRow({ name: l.service, balance: l.price || 0, service_date: l.service_date, service_time: l.service_time,
+                       confirmed: l.booking_confirmed, balance_paid: l.paid,
                        people: l.party_size ? String(l.party_size) : '' });
   updateTotals();
   $('#svc-add').addEventListener('click', () => addServiceRow({ service_date: $('#d-date').value }));
@@ -1626,7 +1630,6 @@ async function openLead(id) {
     });
   }
   followLead('#d-date', '.svc-date');
-  followLead('#d-time', '.svc-time');
   followLead('#d-service', '.svc-name');
 
   // --- autosave: every change in Booking and Bookings & commission is
@@ -1637,11 +1640,7 @@ async function openLead(id) {
   const leadState = () => ({
     service: $('#d-service').value,
     service_date: $('#d-date').value || null,
-    service_time: $('#d-time').value || null,
     party_size: $('#d-party').value || null,
-    client_phone: $('#d-phone').value,
-    paid: $('#d-paid').checked,
-    booking_confirmed: $('#d-confirmed').checked,
     notes: $('#d-notes').value,
     services: collectServices()
   });
@@ -1666,7 +1665,10 @@ async function openLead(id) {
           if (line) { line.id = lineId; delete line.key; }
         }
         lastSaved = now;
-        $('#d-gcal').classList.toggle('hidden', !saved.gcal_event_id);
+        // which services are on Google Calendar now
+        for (const line of saved.services || []) {
+          svcRows.querySelector(`.bk-edit[data-id="${line.id}"] .bk-gcal`)?.classList.toggle('hidden', !line.gcal_event_id);
+        }
         if (saved.calendar_sync_error) {
           saveStatus.classList.add('err');
           saveStatus.textContent = 'Saved ✓ — but Google Calendar didn’t update: ' + saved.calendar_sync_error;
@@ -1693,15 +1695,6 @@ async function openLead(id) {
       scheduleLeadSave(e.target.type === 'checkbox' || e.target.type === 'date' || e.target.type === 'time' ? 150 : 800));
     panel.addEventListener('change', () => scheduleLeadSave(150));
   }
-  // the switches show their state straight away
-  for (const [box, cls] of [['#d-paid', 'on-paid'], ['#d-confirmed', 'on-confirmed']]) {
-    $(box).addEventListener('change', () => {
-      const label = $(box).closest('label');
-      label.classList.toggle(cls, $(box).checked);
-      label.lastChild.textContent = label.lastChild.textContent.replace(/\s*✓?\s*$/, $(box).checked ? ' ✓' : ' ');
-    });
-  }
-
   // --- formatted reply box ---
   const replyBox = $('#d-reply');
   // a saved draft comes back formatted; one saved before formatting existed is plain text
@@ -1935,7 +1928,7 @@ async function openClient(id) {
           <div class="card" data-lead="${l.id}">
             <div class="card-top">
               <span class="card-title">${esc(l.service || l.subject || '—')}</span>
-              ${statusBadge(l.status)} ${payBadge(l.paid, l.services_total ? l.services_owed : 0)} ${bookBadge(l.booking_confirmed)}
+              ${statusBadge(l.status)} ${bookBadge(l.booking_confirmed)}
               <span class="card-right">${svcDateBadge(l.service_date, l.service_time)}</span>
             </div>
           </div>`).join('') : '<div class="empty">No leads yet.</div>'}

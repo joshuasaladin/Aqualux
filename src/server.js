@@ -207,7 +207,7 @@ app.get('/api/leads', (req, res) => {
 const arubaToday = () => new Date(Date.now() - 4 * 3600e3).toISOString().slice(0, 10);
 
 /**
- * Every booked service on a confirmed lead, one row each — the bookings
+ * Every confirmed booked service, one row each — the bookings
  * spreadsheet. A confirmed lead whose booking details haven't been filled
  * in yet still shows up, as one row built from the lead itself
  * (needs_details), so nothing confirmed is ever missing from the totals.
@@ -217,15 +217,14 @@ function bookingRows() {
     SELECT ls.id AS booking_id, l.id AS lead_id, c.name AS client_name,
            COALESCE(ls.service_date, l.service_date) AS date,
            COALESCE(NULLIF(ls.name, ''), l.service) AS service,
-           COALESCE(ls.service_time, CASE WHEN ls.service_date IS NULL OR ls.service_date = l.service_date
-                                          THEN l.service_time END) AS time,
+           ls.service_time AS time,
            l.paid AS lead_paid,
            ls.info, ls.people, ls.downpayment + ls.balance AS price,
            ls.downpayment * ls.downpayment_paid + ls.balance * ls.balance_paid AS received,
            ls.commission, ls.commission_paid, ls.provider, ls.notes, 0 AS needs_details
     FROM lead_services ls
     JOIN leads l ON l.id = ls.lead_id JOIN clients c ON c.id = l.client_id
-    WHERE l.booking_confirmed = 1
+    WHERE ls.confirmed = 1
     UNION ALL
     SELECT NULL, l.id, c.name, l.service_date, l.service, l.service_time, l.paid,
            '', COALESCE(CAST(l.party_size AS TEXT), ''), COALESCE(l.price, 0),
@@ -368,23 +367,19 @@ app.post('/api/leads', (req, res) => {
  * booking lines haven't been filled in yet.
  */
 function calendarEntries(lead) {
-  if (!lead.booking_confirmed) return [];
-  const base = {
-    client_name: lead.client_name, client_email: lead.client_email, client_phone: lead.client_phone,
-    paid: lead.paid
-  };
+  const base = { client_name: lead.client_name, client_email: lead.client_email, client_phone: lead.client_phone };
   if (!lead.services.length) {
-    return lead.service_date ? [{
+    // a lead confirmed before bookings were tracked per service
+    return lead.booking_confirmed && lead.service_date ? [{
       ...base, lineId: null, requestKey: lead.id, service: lead.service, party_size: lead.party_size,
       service_date: lead.service_date, service_time: lead.service_time, notes: lead.notes
     }] : [];
   }
-  return lead.services.map((s) => ({
+  return lead.services.filter((s) => s.confirmed).map((s) => ({
     ...base, lineId: s.id, requestKey: `${lead.id}-${s.id}`,
     service: s.name || lead.service,
     service_date: s.service_date || lead.service_date,
-    service_time: s.service_time ||
-      (!s.service_date || s.service_date === lead.service_date ? lead.service_time : null),
+    service_time: s.service_time,
     info: s.info, people: s.people, provider: s.provider, notes: s.notes
   })).filter((e) => e.service_date);
 }
@@ -492,18 +487,19 @@ app.patch('/api/leads/:id', async (req, res) => {
     const upd = db.prepare(`
       UPDATE lead_services SET name = ?, downpayment = ?, downpayment_paid = ?, balance = ?, balance_paid = ?,
         service_date = ?, service_time = ?, info = ?, people = ?, commission = ?, commission_paid = ?,
-        provider = ?, notes = ? WHERE id = ?`);
+        provider = ?, notes = ?, confirmed = ? WHERE id = ?`);
     const ins = db.prepare(`
       INSERT INTO lead_services (name, downpayment, downpayment_paid, balance, balance_paid,
-        service_date, service_time, info, people, commission, commission_paid, provider, notes, lead_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+        service_date, service_time, info, people, commission, commission_paid, provider, notes, confirmed, lead_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     const kept = new Set();
     for (const s of services) {
       if (!s || (!s.name && !s.downpayment && !s.balance && !s.commission)) continue;
       const vals = [txt(s.name, 200),
         Number(s.downpayment) || 0, s.downpayment_paid ? 1 : 0, Number(s.balance) || 0, s.balance_paid ? 1 : 0,
         dateOrNull(s.service_date), timeOrNull(s.service_time), txt(s.info, 200), txt(s.people, 100),
-        Number(s.commission) || 0, s.commission_paid ? 1 : 0, txt(s.provider, 200), txt(s.notes, 1000)];
+        Number(s.commission) || 0, s.commission_paid ? 1 : 0, txt(s.provider, 200), txt(s.notes, 1000),
+        s.confirmed ? 1 : 0];
       const lineId = Number(s.id);
       if (lineId && existing.has(lineId)) {
         upd.run(...vals, lineId);
@@ -520,6 +516,9 @@ app.patch('/api/leads/:id', async (req, res) => {
       }
       db.prepare(`DELETE FROM lead_services WHERE id = ?`).run(lineId);
     }
+    // the lead is a confirmed booking when any of its services is
+    db.prepare(`UPDATE leads SET booking_confirmed =
+                  EXISTS (SELECT 1 FROM lead_services WHERE lead_id = ? AND confirmed = 1) WHERE id = ?`).run(id, id);
   }
   touchLead(id);
 

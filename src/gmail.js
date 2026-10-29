@@ -1011,7 +1011,6 @@ export function calendarEventBody(lead) {
     lead.info ? `Info: ${lead.info}` : null,
     lead.people ? `People: ${lead.people}` : lead.party_size ? `Party size: ${lead.party_size}` : null,
     lead.provider ? `Provider: ${lead.provider}` : null,
-    `Paid: ${lead.paid ? 'Yes' : 'No'}`,
     lead.notes ? `Notes: ${lead.notes}` : null
   ].filter(Boolean);
   const summary = `${lead.service || 'Booking'} — ${lead.client_name}`;

@@ -411,7 +411,14 @@ button.gmail-attach-chip:hover { background: #d3eff6; }
   padding: 12px 12px 2px; margin-bottom: 10px;
 }
 .bk-edit-grid { display: grid; grid-template-columns: 2fr 1.2fr .9fr 1.4fr 1.2fr; gap: 0 10px; }
-.bk-edit-grid.bk-money { grid-template-columns: repeat(2, minmax(0, 280px)); }
+.bk-edit-grid.bk-money { grid-template-columns: minmax(0, 230px) repeat(2, minmax(0, 280px)); }
+/* each service is confirmed on its own */
+.bk-edit .bk-confirm {
+  align-self: start; margin: 19px 0 10px; display: flex; align-items: center; gap: 7px;
+  padding: 8px 10px; color: var(--text); font-size: .86rem; cursor: pointer;
+}
+.bk-edit .bk-confirm input { margin: 0; }
+.bk-confirm .bk-gcal { margin-left: auto; font-size: .85rem; }
 .bk-edit-grid.bk-last { grid-template-columns: 1.2fr 2fr auto; align-items: end; }
 .bk-edit-grid.bk-last .svc-del { margin-bottom: 10px; }
 .bk-edit input { padding: 7px 9px; font-size: .88rem; margin-top: 3px; }
@@ -638,6 +645,7 @@ main.wide { max-width: 1750px; }
   main { padding: 14px; }
   .form-row { grid-template-columns: 1fr; }
   .bk-edit-grid, .bk-edit-grid.bk-money { grid-template-columns: 1fr 1fr; }
+  .bk-edit .bk-confirm { grid-column: 1 / -1; margin-top: 4px; }
   .bk-edit-grid .bk-f-service, .bk-edit-grid .bk-f-notes { grid-column: 1 / -1; }
   .bk-edit-grid.bk-last { grid-template-columns: 1fr; }
   .filters #bk-period, .filters #bk-service { width: 100%; }
