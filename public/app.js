@@ -336,9 +336,10 @@ function showView(name) {
   // The calendar and the bookings table get the full window width; every
   // other view keeps the narrower reading column.
   document.querySelector('main').classList.toggle('wide', name === 'calendar' || name === 'bookings');
+  document.querySelector('main').classList.toggle('roomy', name === 'services');
   document.querySelectorAll('.nav-btn').forEach((b) =>
     b.classList.toggle('active', b.dataset.view === name));
-  const inOtherMenu = name === 'clients' || name === 'services';
+  const inOtherMenu = name === 'clients';
   $('#other-toggle').classList.toggle('active', inOtherMenu);
   document.querySelectorAll('.nav-dropdown-item').forEach((b) =>
     b.classList.toggle('active', b.dataset.view === name));
@@ -420,6 +421,7 @@ let leadGroup = (() => { try { return localStorage.getItem('aqualux_lead_group')
 const monthName = (ym) => new Date(ym + '-15T12:00:00').toLocaleDateString('en-US', { month: 'long' });
 
 async function loadLeads() {
+  $('#leads-date').textContent = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
   const params = new URLSearchParams();
   if ($('#lead-search').value) params.set('q', $('#lead-search').value);
   const sort = $('#lead-sort').value;
@@ -843,287 +845,524 @@ $('#payment-form').addEventListener('submit', async (e) => {
   loadPayments();
 });
 
-/* ------------------------------------------------------ services book --- */
+/* ---------------------------------------------------------- services ---- */
+// One info page per service: everything about it (from our website, the
+// provider's website and our own notes). The AI reply helper reads these.
 const PRICE_UNIT_LABELS = {
   per_person: '/ person', per_hour: '/ hour', per_day: '/ day',
-  per_vehicle: '/ vehicle', flat_total: 'flat', quote: 'quote'
+  per_vehicle: '/ vehicle', flat_total: 'total', quote: 'quote'
 };
-const collapsedCategories = new Set(JSON.parse(localStorage.getItem('aqualux_collapsed_cats') || '[]'));
-const expandedServices = new Set();
-
-function fmtDownpayment(o) {
-  const parts = [];
-  if (o.downpayment_percent) parts.push(`${o.downpayment_percent}%`);
-  if (o.downpayment_fixed) parts.push(`${money(o.downpayment_fixed)}${o.downpayment_per_person ? '/person' : ''}`);
-  return parts.length ? parts.join(' + ') + ' down' : '';
-}
-
-function priceSummary(options) {
-  const priced = options.filter((o) => o.price_unit !== 'quote' && o.price);
-  if (!priced.length) return options.length ? 'Quote only' : 'No pricing yet';
-  const prices = priced.map((o) => o.price);
-  const lo = Math.min(...prices), hi = Math.max(...prices);
-  const unit = PRICE_UNIT_LABELS[priced[0].price_unit] || '';
-  const range = lo === hi ? money(lo) : `${money(lo)}–${money(hi)}`;
-  return `${range} ${unit}${options.length > 1 ? ` · ${options.length} options` : ''}`;
-}
-
-function optionSummaryLine(o) {
-  const people = (o.min_people || o.max_people)
-    ? `👥 ${o.min_people || 1}${o.max_people ? '–' + o.max_people : '+'}` : '';
-  const dp = fmtDownpayment(o);
-  const price = o.price_unit === 'quote' ? 'Personal quote' : `${money(o.price)} ${PRICE_UNIT_LABELS[o.price_unit]}`;
-  return { people, dp, price };
-}
-
-function serviceCard(s) {
-  const expanded = expandedServices.has(s.id);
-  const hasFlag = s.options.some((o) => o.notes?.includes('⚠'));
-  return `
-  <div class="svc-card ${expanded ? 'expanded' : ''}" data-service="${s.id}">
-    <div class="svc-card-head" data-toggle="${s.id}">
-      <span class="svc-card-title">${esc(s.service_name)}</span>
-      ${s.company ? `<span class="svc-company-badge">${esc(s.company)}</span>` : ''}
-      ${s.booking_method ? `<span class="svc-comm-badge">${esc(s.booking_method)}</span>` : ''}
-      ${hasFlag ? `<span class="svc-flag-badge">⚠ needs review</span>` : ''}
-      <span class="svc-card-right">
-        <span class="svc-price-summary">${esc(priceSummary(s.options))}</span>
-        <span class="chev">▾</span>
-      </span>
-    </div>
-    ${expanded ? serviceCardBody(s) : ''}
-  </div>`;
-}
-
-function optionEditRow(o = {}, idx) {
-  const id = o.id ?? `new${idx}`;
-  return `
-  <div class="opt-row" data-opt="${id}">
-    <div class="opt-row-line1">
-      <input class="opt-name" placeholder="Option name" value="${esc(o.option_name || '')}">
-      <input class="opt-timing" placeholder="Timing" value="${esc(o.timing || '')}">
-      <button type="button" class="btn btn-sm opt-del" title="Remove option">×</button>
-    </div>
-    <div class="opt-row-line2">
-      <label class="opt-field">Price<input class="opt-price" type="number" min="0" step="0.01" value="${o.price ?? ''}" placeholder="0.00"></label>
-      <label class="opt-field">Unit
-        <select class="opt-unit">
-          <option value="per_person" ${o.price_unit === 'per_person' ? 'selected' : ''}>per person</option>
-          <option value="flat_total" ${o.price_unit === 'flat_total' ? 'selected' : ''}>flat total</option>
-          <option value="per_vehicle" ${o.price_unit === 'per_vehicle' ? 'selected' : ''}>per vehicle</option>
-          <option value="per_hour" ${o.price_unit === 'per_hour' ? 'selected' : ''}>per hour</option>
-          <option value="per_day" ${o.price_unit === 'per_day' ? 'selected' : ''}>per day</option>
-          <option value="quote" ${o.price_unit === 'quote' ? 'selected' : ''}>personal quote</option>
-        </select>
-      </label>
-      <label class="opt-field">Child price<input class="opt-child" type="number" min="0" step="0.01" value="${o.child_price || ''}" placeholder="0.00"></label>
-      <label class="opt-field">Min people<input class="opt-min" type="number" min="1" step="1" value="${o.min_people ?? ''}" placeholder="1"></label>
-      <label class="opt-field">Max people<input class="opt-max" type="number" min="1" step="1" value="${o.max_people ?? ''}" placeholder="∞"></label>
-    </div>
-    <div class="opt-row-line3">
-      <label class="opt-field">Downpayment %<input class="opt-dp-pct" type="number" min="0" step="0.01" value="${o.downpayment_percent || ''}" placeholder="0"></label>
-      <label class="opt-field">Downpayment $<input class="opt-dp-fix" type="number" min="0" step="0.01" value="${o.downpayment_fixed || ''}" placeholder="0"></label>
-      <label class="opt-field mini-check"><input type="checkbox" class="opt-dp-pp" ${o.downpayment_per_person ? 'checked' : ''}> $ is per person</label>
-      <input class="opt-notes" placeholder="Notes for this option…" value="${esc(o.notes || '')}">
-    </div>
-  </div>`;
-}
-
-function serviceCardBody(s) {
-  return `
-    <div class="svc-card-body">
-      <div class="svc-vendor-grid">
-        <label>Category<input class="sf-category" value="${esc(s.category)}" list="category-list"></label>
-        <label>Wix form name<input class="sf-wix" value="${esc(s.wix_form_name)}" placeholder="Exact name on your website form"></label>
-        <label>Company / Provider<input class="sf-company" value="${esc(s.company)}"></label>
-        <label>Contact<input class="sf-contact" value="${esc(s.contact)}" placeholder="Phone / email"></label>
-        <label>Booking method<input class="sf-booking" value="${esc(s.booking_method)}" list="booking-method-list"></label>
-        <label>Info needed to book<input class="sf-info" value="${esc(s.info_needed)}"></label>
-        <label>Commission<input class="sf-commission" value="${esc(s.commission)}"></label>
-        <label>Internal notes<input class="sf-internal" value="${esc(s.internal_notes)}" placeholder="Vendor-only notes"></label>
-      </div>
-
-      <h4>Pricing options</h4>
-      <div class="opt-rows">${s.options.map((o, i) => optionEditRow(o, i)).join('')}</div>
-      <button type="button" class="btn btn-sm opt-add">+ Add option</button>
-
-      <div class="svc-card-actions">
-        <button type="button" class="btn btn-primary btn-sm svc-save">Save changes</button>
-        <button type="button" class="btn btn-danger btn-sm svc-delete">Delete service</button>
-        <span class="send-status svc-save-status"></span>
-      </div>
-    </div>`;
-}
+const CATEGORY_ICONS = {
+  'Water Activity': '🌊', Adventure: '🏜️', Relaxation: '💆', 'Private Cuisine': '🍽️',
+  Moments: '🎈', Transportation: '🚐'
+};
+const catIcon = (c) => CATEGORY_ICONS[c] || '✦';
 
 let allServices = [];
+let serviceCat = (() => { try { return localStorage.getItem('aqualux_svc_cat') || ''; } catch { return ''; } })();
 
-async function runCatalogSync(btn, idleLabel) {
-  btn.disabled = true;
-  btn.textContent = 'Syncing…';
-  const result = await api('/services/reimport', { method: 'POST' });
-  if (result.created > 0 || result.options > 0) {
-    loadServices();
-    if (result.errors?.length) {
-      alert(`Added ${result.created} service(s) and ${result.options} pricing option(s), but ${result.errors.length} item(s) failed:\n\n${result.errors.slice(0, 5).join('\n')}\n\nClick again to retry just those.`);
-    }
-  } else if (result.errors?.length) {
-    alert(`Sync failed:\n\n${result.errors.slice(0, 5).join('\n')}`);
-  } else {
-    alert('Everything from the starter catalog is already here — nothing new to add.');
-  }
-  btn.disabled = false;
-  btn.textContent = idleLabel;
+// Wix images come in full size; ask Wix for a smaller copy for the cards.
+function sizedImage(url, w, h) {
+  const m = String(url || '').match(/^https:\/\/static\.wixstatic\.com\/media\/([^/?#]+)$/);
+  return m ? `${url}/v1/fill/w_${w},h_${h},al_c,q_80,enc_auto/${m[1]}` : url;
 }
 
+function fromPrice(options) {
+  const priced = options.filter((o) => o.price_unit !== 'quote' && Number(o.price) > 0);
+  if (!priced.length) return options.length ? 'Price on request' : '';
+  const lo = priced.reduce((a, o) => (o.price < a.price ? o : a));
+  const unit = PRICE_UNIT_LABELS[lo.price_unit] || '';
+  return `${priced.length > 1 ? 'from ' : ''}${money(lo.price)} ${unit === 'total' ? '' : unit}`.trim();
+}
+
+function serviceTile(s) {
+  const n = s.suggestions?.length || 0;
+  // the icon shows when there's no photo, or the photo can't load
+  const img = `<span class="svc-tile-ph">${catIcon(s.category)}</span>` + (s.image_url
+    ? `<img src="${esc(sizedImage(s.image_url, 640, 420))}" alt="" loading="lazy" onerror="this.remove()">` : '');
+  return `
+  <button class="svc-tile" data-svc="${s.id}">
+    <div class="svc-tile-img">${img}
+      ${s.category ? `<span class="svc-tile-cat">${esc(s.category)}</span>` : ''}
+      ${n ? `<span class="svc-tile-flag">✨ ${n} update${n === 1 ? '' : 's'} to review</span>` : ''}
+    </div>
+    <div class="svc-tile-body">
+      <div class="svc-tile-title">${esc(s.service_name)}</div>
+      <div class="svc-tile-provider">${s.company ? esc(s.company) : '<i>No provider yet</i>'}</div>
+      <div class="svc-tile-foot">
+        <span class="svc-tile-price">${esc(fromPrice(s.options))}</span>
+        ${s.website_url
+          ? '<span class="svc-tile-web ok" title="Provider website linked">🔗 Linked</span>'
+          : '<span class="svc-tile-web" title="Add the provider’s website on this page">No website link</span>'}
+      </div>
+    </div>
+  </button>`;
+}
+
+function renderServiceGrid() {
+  const q = $('#service-search').value.trim().toLowerCase();
+  const cats = [...new Set(allServices.map((s) => s.category).filter(Boolean))].sort();
+  if (serviceCat && !cats.includes(serviceCat)) serviceCat = '';
+  $('#svc-cats').innerHTML = ['', ...cats].map((c) => `
+    <button class="chip ${c === serviceCat ? 'active' : ''}" data-cat="${esc(c)}">
+      ${c ? `${catIcon(c)} ${esc(c)}` : 'All'}
+      <span class="chip-count">${c ? allServices.filter((s) => s.category === c).length : allServices.length}</span>
+    </button>`).join('');
+  $('#svc-cats').querySelectorAll('[data-cat]').forEach((b) => b.addEventListener('click', () => {
+    serviceCat = b.dataset.cat;
+    try { localStorage.setItem('aqualux_svc_cat', serviceCat); } catch { /* private mode */ }
+    renderServiceGrid();
+  }));
+  $('#category-list').innerHTML = cats.map((c) => `<option value="${esc(c)}">`).join('');
+
+  const list = allServices.filter((s) => (!serviceCat || s.category === serviceCat) &&
+    (!q || [s.service_name, s.company, s.category, s.wix_form_name, s.summary]
+      .some((v) => String(v || '').toLowerCase().includes(q))));
+  const pending = allServices.reduce((a, s) => a + (s.suggestions?.length || 0), 0);
+  $('#svc-review-note').innerHTML = pending
+    ? `✨ The website check found <b>${pending}</b> update${pending === 1 ? '' : 's'} to review — open a service marked ✨ to accept or dismiss them.`
+    : '';
+  $('#svc-review-note').classList.toggle('hidden', !pending);
+  $('#service-grid').innerHTML = list.length ? list.map(serviceTile).join('') : `
+    <div class="empty">${allServices.length ? 'No services match.' : 'No services yet. Add one, or import them from aqualuxaruba.com.'}</div>`;
+  $('#service-grid').querySelectorAll('[data-svc]').forEach((b) =>
+    b.addEventListener('click', () => openService(Number(b.dataset.svc))));
+}
 
 async function loadServices() {
   serviceBookPromise = null; // the booking suggestions re-read any edits made here
-  const q = $('#service-search').value;
-  allServices = await api('/services' + (q ? '?q=' + encodeURIComponent(q) : ''));
+  allServices = await api('/services');
+  renderServiceGrid();
+}
 
-  const cats = [...new Set(allServices.map((r) => r.category).filter(Boolean))].sort();
-  $('#category-list').innerHTML = cats.map((c) => `<option value="${esc(c)}">`).join('');
+$('#service-search').addEventListener('input', renderServiceGrid);
 
-  if (!allServices.length) {
-    $('#service-groups').innerHTML = `
-      <div class="empty">
-        No services yet. Click “+ Add service” to build your info book — pricing, timings, commissions, everything in one place.<br><br>
-        <button class="btn btn-primary btn-sm" id="btn-reimport-catalog">⟳ Import starter catalog</button>
-      </div>`;
-    $('#btn-reimport-catalog')?.addEventListener('click', () => runCatalogSync($('#btn-reimport-catalog'), '⟳ Import starter catalog'));
+$('#btn-import-site').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = 'Importing…';
+  try {
+    const r = await api('/services/import-website', { method: 'POST' });
+    await loadServices();
+    toast(r.created || r.filled
+      ? `Imported: ${r.created} new service${r.created === 1 ? '' : 's'}, ${r.filled} page${r.filled === 1 ? '' : 's'} filled in. Nothing you wrote was changed.`
+      : 'Everything from aqualuxaruba.com is already here.');
+  } catch (err) {
+    toast('Import failed: ' + err.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+});
+
+// Check every service that has a provider website, one after another.
+let checkingAll = false;
+$('#btn-check-all').addEventListener('click', async () => {
+  if (checkingAll) return;
+  const targets = allServices.filter((s) => s.website_url);
+  if (!targets.length) {
+    toast('Add the provider’s website link on a service first — open a service and paste it under “Provider website”.');
     return;
   }
-
-  const byCategory = new Map();
-  for (const s of allServices) {
-    const cat = s.category || 'Uncategorized';
-    if (!byCategory.has(cat)) byCategory.set(cat, []);
-    byCategory.get(cat).push(s);
+  if (!confirm(`Check ${targets.length} provider website${targets.length === 1 ? '' : 's'} for price and info changes?\n\nThis takes about a minute per website and costs roughly 10–30¢ each in Claude usage. Nothing changes until you accept the updates.`)) return;
+  checkingAll = true;
+  const bar = $('#svc-progress');
+  bar.classList.remove('hidden');
+  let found = 0, failed = 0;
+  for (let i = 0; i < targets.length; i++) {
+    const s = targets[i];
+    bar.innerHTML = `<span class="ai-spinner"></span> Checking ${i + 1} of ${targets.length}: <b>${esc(s.service_name)}</b>…
+      <span class="svc-progress-track"><span style="width:${Math.round((i / targets.length) * 100)}%"></span></span>`;
+    try {
+      const updated = await api(`/services/${s.id}/check`, { method: 'POST' });
+      found += updated.suggestions?.length || 0;
+      const idx = allServices.findIndex((x) => x.id === s.id);
+      if (idx >= 0) allServices[idx] = updated;
+      renderServiceGrid();
+    } catch (err) {
+      failed++;
+      if (/API key|credit/i.test(err.message)) { toast(err.message, 'err'); break; }
+    }
   }
-
-  $('#service-groups').innerHTML = [...byCategory.entries()].map(([cat, items]) => {
-    const collapsed = collapsedCategories.has(cat);
-    return `
-    <div class="svc-category ${collapsed ? 'collapsed' : ''}" data-cat="${esc(cat)}">
-      <div class="svc-category-head">
-        <h3>${esc(cat)}</h3>
-        <span class="count">${items.length} service${items.length === 1 ? '' : 's'}</span>
-        <span class="chev">▾</span>
-      </div>
-      <div class="svc-category-items">${items.map(serviceCard).join('')}</div>
-    </div>`;
-  }).join('');
-
-  document.querySelectorAll('.svc-category-head').forEach((el) =>
-    el.addEventListener('click', () => {
-      const group = el.closest('.svc-category');
-      const cat = group.dataset.cat;
-      group.classList.toggle('collapsed');
-      if (group.classList.contains('collapsed')) collapsedCategories.add(cat);
-      else collapsedCategories.delete(cat);
-      localStorage.setItem('aqualux_collapsed_cats', JSON.stringify([...collapsedCategories]));
-    }));
-
-  bindServiceCardEvents();
-}
-
-function bindServiceCardEvents() {
-  document.querySelectorAll('.svc-card-head[data-toggle]').forEach((el) =>
-    el.addEventListener('click', () => {
-      const id = Number(el.dataset.toggle);
-      if (expandedServices.has(id)) expandedServices.delete(id);
-      else expandedServices.add(id);
-      loadServices();
-    }));
-
-  document.querySelectorAll('.opt-add').forEach((btn) =>
-    btn.addEventListener('click', () => {
-      const rows = btn.closest('.svc-card-body').querySelector('.opt-rows');
-      rows.insertAdjacentHTML('beforeend', optionEditRow({}, rows.children.length));
-      bindOptionRowEvents(rows);
-    }));
-
-  document.querySelectorAll('.opt-rows').forEach(bindOptionRowEvents);
-
-  document.querySelectorAll('.svc-save').forEach((btn) =>
-    btn.addEventListener('click', async () => {
-      const card = btn.closest('.svc-card');
-      const id = card.dataset.service;
-      const body = card.querySelector('.svc-card-body');
-      const options = [...body.querySelectorAll('.opt-row')].map((row) => ({
-        option_name: row.querySelector('.opt-name').value,
-        timing: row.querySelector('.opt-timing').value,
-        price: row.querySelector('.opt-price').value,
-        price_unit: row.querySelector('.opt-unit').value,
-        child_price: row.querySelector('.opt-child').value,
-        min_people: row.querySelector('.opt-min').value,
-        max_people: row.querySelector('.opt-max').value,
-        downpayment_percent: row.querySelector('.opt-dp-pct').value,
-        downpayment_fixed: row.querySelector('.opt-dp-fix').value,
-        downpayment_per_person: row.querySelector('.opt-dp-pp').checked,
-        notes: row.querySelector('.opt-notes').value
-      }));
-      const status = card.querySelector('.svc-save-status');
-      status.textContent = 'Saving…';
-      await api('/services/' + id, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          category: body.querySelector('.sf-category').value,
-          wix_form_name: body.querySelector('.sf-wix').value,
-          company: body.querySelector('.sf-company').value,
-          contact: body.querySelector('.sf-contact').value,
-          booking_method: body.querySelector('.sf-booking').value,
-          info_needed: body.querySelector('.sf-info').value,
-          commission: body.querySelector('.sf-commission').value,
-          internal_notes: body.querySelector('.sf-internal').value,
-          options
-        })
-      });
-      loadServices();
-    }));
-
-  document.querySelectorAll('.svc-delete').forEach((btn) =>
-    btn.addEventListener('click', async () => {
-      const card = btn.closest('.svc-card');
-      const id = card.dataset.service;
-      if (!confirm('Delete this service and all its pricing options?')) return;
-      await api('/services/' + id, { method: 'DELETE' });
-      expandedServices.delete(Number(id));
-      loadServices();
-    }));
-}
-
-function bindOptionRowEvents(rows) {
-  rows.querySelectorAll('.opt-del').forEach((btn) => {
-    if (btn.dataset.bound) return;
-    btn.dataset.bound = '1';
-    btn.addEventListener('click', () => btn.closest('.opt-row').remove());
-  });
-}
-
-let serviceSearchTimer;
-$('#service-search').addEventListener('input', () => {
-  clearTimeout(serviceSearchTimer); serviceSearchTimer = setTimeout(loadServices, 250);
+  checkingAll = false;
+  bar.classList.add('hidden');
+  toast(`Website check done: ${found} update${found === 1 ? '' : 's'} to review${failed ? `, ${failed} website${failed === 1 ? '' : 's'} could not be checked` : ''}.`);
 });
 
 $('#btn-add-service').addEventListener('click', () => {
   $('#service-form').reset();
   $('#service-modal-backdrop').classList.remove('hidden');
-  $('#service-form [name=category]').focus();
+  $('#service-form [name=service_name]').focus();
 });
 $('#service-cancel').addEventListener('click', () => $('#service-modal-backdrop').classList.add('hidden'));
 $('#service-modal-backdrop').addEventListener('click', (e) => {
   if (e.target === $('#service-modal-backdrop')) $('#service-modal-backdrop').classList.add('hidden');
 });
-
 $('#service-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const body = Object.fromEntries(new FormData(e.target).entries());
   const created = await api('/services', { method: 'POST', body: JSON.stringify(body) });
   $('#service-modal-backdrop').classList.add('hidden');
-  expandedServices.add(created.id);
-  loadServices();
+  await loadServices();
+  openService(created.id);
 });
+
+/* ---- service info page (opens over the grid) ---- */
+const SVC_INFO_FIELDS = [
+  ['summary', 'About this service', 3],
+  ['included', 'What’s included', 4],
+  ['duration', 'Duration & times', 2],
+  ['location', 'Location / meeting point', 2],
+  ['good_to_know', 'Good to know', 3],
+  ['cancellation_policy', 'Cancellation policy', 2]
+];
+const SVC_BOOKING_FIELDS = [
+  ['company', 'Provider (company)', 1],
+  ['contact', 'Provider contact', 1],
+  ['booking_method', 'How we book it', 1, 'booking-method-list'],
+  ['info_needed', 'What we need from the guest to book', 2],
+  ['commission', 'Our commission', 1],
+  ['internal_notes', 'Internal notes', 3]
+];
+const SVC_PAGE_FIELDS = [
+  ['service_name', 'Service name', 1],
+  ['category', 'Category', 1, 'category-list'],
+  ['wix_form_name', 'Name on our website form', 1],
+  ['page_url', 'Our page on aqualuxaruba.com', 1],
+  ['image_url', 'Photo (image link)', 1]
+];
+
+function svcField([key, label, rows, list], s) {
+  const v = esc(s[key] || '');
+  const input = rows > 1
+    ? `<textarea class="sf auto-grow" data-f="${key}" rows="${rows}">${v}</textarea>`
+    : `<input class="sf" data-f="${key}" value="${v}" ${list ? `list="${list}"` : ''}>`;
+  return `<label class="sf-label">${label}${input}</label>`;
+}
+
+function optionEditRow(o = {}) {
+  const ref = o.id ? `data-id="${o.id}"` : `data-key="k${Math.random().toString(36).slice(2, 9)}"`;
+  const unit = o.price_unit || 'per_person';
+  return `
+  <div class="opt-row" ${ref}>
+    <div class="opt-row-line1">
+      <input class="opt-name" placeholder="Option name" value="${esc(o.option_name || '')}">
+      <button type="button" class="opt-del" title="Remove this option" aria-label="Remove option">×</button>
+    </div>
+    <div class="opt-row-line2">
+      <label class="opt-field">Price<input class="opt-price" type="number" min="0" step="0.01" inputmode="decimal" value="${o.price || ''}"></label>
+      <label class="opt-field">Per
+        <select class="opt-unit">
+          ${Object.entries({ per_person: 'person', flat_total: 'total', per_vehicle: 'vehicle', per_hour: 'hour', per_day: 'day', quote: 'quote on request' })
+            .map(([k, l]) => `<option value="${k}" ${unit === k ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>
+      </label>
+      <label class="opt-field">Child price<input class="opt-child" type="number" min="0" step="0.01" inputmode="decimal" value="${o.child_price || ''}"></label>
+      <label class="opt-field">Min people<input class="opt-min" type="number" min="1" step="1" inputmode="numeric" value="${o.min_people ?? ''}"></label>
+      <label class="opt-field">Max people<input class="opt-max" type="number" min="1" step="1" inputmode="numeric" value="${o.max_people ?? ''}"></label>
+    </div>
+    <div class="opt-row-line3">
+      <label class="opt-field">Times<input class="opt-timing" value="${esc(o.timing || '')}"></label>
+      <label class="opt-field">Deposit %<input class="opt-dp-pct" type="number" min="0" step="0.01" inputmode="decimal" value="${o.downpayment_percent || ''}"></label>
+      <label class="opt-field">Deposit $<input class="opt-dp-fix" type="number" min="0" step="0.01" inputmode="decimal" value="${o.downpayment_fixed || ''}"></label>
+      <label class="opt-field opt-check"><input type="checkbox" class="opt-dp-pp" ${o.downpayment_per_person ? 'checked' : ''}> $ per person</label>
+    </div>
+    <label class="opt-field">Notes<input class="opt-notes" value="${esc(o.notes || '')}"></label>
+  </div>`;
+}
+
+function proposalHtml(p) {
+  const fmtOpt = (o) => o ? `${o.option_name ? `<b>${esc(o.option_name)}</b> · ` : ''}${o.price_unit === 'quote' && !o.price ? 'quote' : `${money(o.price)} ${PRICE_UNIT_LABELS[o.price_unit] || ''}`}${o.child_price ? ` · child ${money(o.child_price)}` : ''}${o.timing ? ` · ${esc(o.timing)}` : ''}${o.notes ? ` · ${esc(o.notes)}` : ''}` : '';
+  let what;
+  if (p.kind === 'field') {
+    what = `
+      <div class="prop-title">${esc(p.label)}</div>
+      ${p.old_value ? `<div class="prop-old">${textToHtml(p.old_value)}</div>` : '<div class="prop-old prop-empty">Empty now</div>'}
+      <div class="prop-new">${textToHtml(p.new_value)}</div>`;
+  } else {
+    what = `
+      <div class="prop-title">${p.action === 'add' ? 'New price option' : `Price: ${esc(p.label)}`}</div>
+      ${p.action === 'update' ? `<div class="prop-old">${fmtOpt(p.old)}</div>` : ''}
+      <div class="prop-new">${fmtOpt(p.option)}</div>`;
+  }
+  return `
+  <div class="prop" data-prop="${esc(p.id)}">
+    <div class="prop-main">${what}${p.reason ? `<div class="prop-why">${esc(p.reason)}</div>` : ''}</div>
+    <div class="prop-actions">
+      <button class="btn btn-sm btn-primary" data-accept="${esc(p.id)}">Accept</button>
+      <button class="btn btn-sm" data-dismiss="${esc(p.id)}">Dismiss</button>
+    </div>
+  </div>`;
+}
+
+function fmtChecked(iso) {
+  if (!iso) return '';
+  const d = new Date(iso.replace(' ', 'T') + 'Z');
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+let svcPending = null; // flushes unsaved edits when the page closes
+
+function closeServicePage() {
+  const flush = svcPending;
+  svcPending = null;
+  flush?.();
+  $('#svc-drawer').classList.add('hidden');
+  $('#svc-backdrop').classList.add('hidden');
+  document.body.classList.remove('no-scroll');
+  if (currentView === 'services') renderServiceGrid();
+}
+$('#svc-backdrop').addEventListener('click', closeServicePage);
+
+async function openService(id) {
+  if (svcPending) { await svcPending(); svcPending = null; }
+  const s = allServices.find((x) => x.id === id) || await api('/services').then((l) => l.find((x) => x.id === id));
+  if (!s) return;
+  const link = (url, label) => url ? `<a href="${esc(url)}" target="_blank" rel="noopener">${label} ↗</a>` : '';
+  const hero = s.image_url ? `style="background-image:linear-gradient(180deg, rgba(8,24,40,.15), rgba(8,24,40,.82)), url('${esc(sizedImage(s.image_url, 1400, 620))}')"` : '';
+  $('#svc-drawer-content').innerHTML = `
+  <div class="svc-hero ${s.image_url ? '' : 'no-img'}" ${hero}>
+    <button class="svc-close" id="svc-close" aria-label="Close">×</button>
+    <div class="svc-hero-inner">
+      ${s.category ? `<span class="svc-hero-cat">${catIcon(s.category)} ${esc(s.category)}</span>` : ''}
+      <h2 id="svc-title">${esc(s.service_name)}</h2>
+      <div class="svc-hero-sub">
+        ${s.company ? `<span>by ${esc(s.company)}</span>` : ''}
+        ${link(s.page_url, 'Our page')}
+        ${link(s.website_url, 'Provider website')}
+      </div>
+    </div>
+    <span class="svc-saved" id="svc-saved"></span>
+  </div>
+
+  <div class="svc-page">
+    <div id="svc-props"></div>
+
+    <div class="panel svc-web-panel">
+      <h3>Provider website</h3>
+      <p class="reply-hint">The company’s own website for this service. The AI reads it to keep prices and details here up to date — you approve every change.</p>
+      <div class="svc-web-row">
+        <input class="sf" data-f="website_url" type="url" inputmode="url" autocomplete="off" spellcheck="false"
+               placeholder="https://" value="${esc(s.website_url || '')}">
+        <button class="btn btn-ai" id="svc-check">✨ <span>${s.website_url ? 'Check website for updates' : 'Find website & check'}</span></button>
+      </div>
+      <div class="svc-check-info" id="svc-check-info">${s.checked_at
+        ? `Last checked ${fmtChecked(s.checked_at)}${s.check_summary ? ` — ${esc(s.check_summary)}` : ''}`
+        : 'Not checked yet.'}</div>
+    </div>
+
+    <div class="svc-cols">
+      <div class="panel">
+        <h3>About this service</h3>
+        <p class="reply-hint svc-hint">What guests should know. The AI uses this when it writes replies.</p>
+        ${SVC_INFO_FIELDS.map((f) => svcField(f, s)).join('')}
+      </div>
+      <div>
+        <div class="panel">
+          <h3>Prices</h3>
+          <p class="reply-hint svc-hint">What we charge guests. The AI quotes these prices.</p>
+          <div class="opt-rows" id="svc-opts">${s.options.map((o) => optionEditRow(o)).join('')}</div>
+          <button type="button" class="btn btn-sm" id="svc-opt-add">+ Add price option</button>
+          <label class="sf-label" style="margin-top:14px">Prices shown on aqualuxaruba.com
+            <textarea class="sf auto-grow" data-f="website_prices" rows="2">${esc(s.website_prices || '')}</textarea></label>
+        </div>
+        <div class="panel">
+          <h3>Booking & provider <span class="internal-tag">internal</span></h3>
+          ${SVC_BOOKING_FIELDS.map((f) => svcField(f, s)).join('')}
+        </div>
+        <div class="panel">
+          <h3>Page details</h3>
+          ${SVC_PAGE_FIELDS.map((f) => svcField(f, s)).join('')}
+        </div>
+      </div>
+    </div>
+
+    ${s.website_text ? `
+    <details class="panel svc-source">
+      <summary>What our website says</summary>
+      <div class="svc-source-text">${textToHtml(s.website_text)}</div>
+    </details>` : ''}
+    <details class="panel svc-source ${s.provider_text ? '' : 'hidden'}" id="svc-provider-source">
+      <summary>What the provider’s website says (last check)</summary>
+      <div class="svc-source-text" id="svc-provider-text">${textToHtml(s.provider_text || '')}</div>
+    </details>
+
+    <button class="btn btn-danger btn-sm" id="svc-delete">Delete this service</button>
+  </div>`;
+
+  const drawer = $('#svc-drawer');
+  drawer.classList.remove('hidden');
+  $('#svc-backdrop').classList.remove('hidden');
+  document.body.classList.add('no-scroll');
+  drawer.scrollTop = 0;
+  $('#svc-close').addEventListener('click', closeServicePage);
+
+  const grow = (el) => { el.style.height = 'auto'; el.style.height = el.scrollHeight + 2 + 'px'; };
+  drawer.querySelectorAll('.auto-grow').forEach((el) => { grow(el); el.addEventListener('input', () => grow(el)); });
+
+  // --- autosave: only what changed, shortly after typing stops ---
+  const savedEl = $('#svc-saved');
+  let dirty = {}, optsDirty = false, timer = null, saving = Promise.resolve();
+  const showSaved = (txt, cls = '') => { savedEl.textContent = txt; savedEl.className = `svc-saved ${cls}`; };
+  function readOptions() {
+    return [...$('#svc-opts').querySelectorAll('.opt-row')].map((row) => ({
+      id: row.dataset.id ? Number(row.dataset.id) : undefined,
+      key: row.dataset.key,
+      option_name: row.querySelector('.opt-name').value,
+      price: row.querySelector('.opt-price').value,
+      price_unit: row.querySelector('.opt-unit').value,
+      child_price: row.querySelector('.opt-child').value,
+      min_people: row.querySelector('.opt-min').value,
+      max_people: row.querySelector('.opt-max').value,
+      timing: row.querySelector('.opt-timing').value,
+      downpayment_percent: row.querySelector('.opt-dp-pct').value,
+      downpayment_fixed: row.querySelector('.opt-dp-fix').value,
+      downpayment_per_person: row.querySelector('.opt-dp-pp').checked,
+      notes: row.querySelector('.opt-notes').value
+    }));
+  }
+  function applySaved(updated) {
+    for (const [key, newId] of Object.entries(updated.new_option_ids || {})) {
+      const row = $('#svc-opts').querySelector(`.opt-row[data-key="${key}"]`);
+      if (row) { row.dataset.id = newId; delete row.dataset.key; }
+    }
+    delete updated.new_option_ids;
+    const idx = allServices.findIndex((x) => x.id === id);
+    if (idx >= 0) allServices[idx] = updated; else allServices.push(updated);
+    Object.assign(s, updated);
+    $('#svc-title').textContent = updated.service_name;
+  }
+  async function saveNow() {
+    clearTimeout(timer);
+    if (!Object.keys(dirty).length && !optsDirty) return;
+    const body = { ...dirty };
+    if (optsDirty) body.options = readOptions();
+    dirty = {}; optsDirty = false;
+    showSaved('Saving…');
+    saving = saving.then(async () => {
+      try {
+        applySaved(await api('/services/' + id, { method: 'PATCH', body: JSON.stringify(body) }));
+        showSaved('Saved ✓', 'ok');
+        setTimeout(() => { if (savedEl.textContent === 'Saved ✓') showSaved(''); }, 1800);
+      } catch (err) {
+        Object.assign(dirty, body); delete dirty.options;
+        if (body.options) optsDirty = true;
+        showSaved('Not saved — ' + err.message, 'err');
+      }
+    });
+    return saving;
+  }
+  svcPending = saveNow;
+  const schedule = (ms = 700) => { clearTimeout(timer); timer = setTimeout(saveNow, ms); };
+  drawer.querySelectorAll('.sf').forEach((el) => {
+    el.addEventListener('input', () => { dirty[el.dataset.f] = el.value; schedule(); });
+    el.addEventListener('blur', () => saveNow());
+  });
+  const optRows = $('#svc-opts');
+  optRows.addEventListener('input', () => { optsDirty = true; schedule(); });
+  optRows.addEventListener('change', () => { optsDirty = true; schedule(250); });
+  optRows.addEventListener('click', (e) => {
+    const del = e.target.closest('.opt-del');
+    if (!del) return;
+    del.closest('.opt-row').remove();
+    optsDirty = true; schedule(150);
+  });
+  $('#svc-opt-add').addEventListener('click', () => {
+    optRows.insertAdjacentHTML('beforeend', optionEditRow({}));
+    optRows.lastElementChild.querySelector('.opt-name').focus();
+  });
+
+  // --- proposals from the website check ---
+  function renderProps() {
+    const list = s.suggestions || [];
+    $('#svc-props').innerHTML = list.length ? `
+      <div class="panel props-panel">
+        <div class="props-head">
+          <h3>✨ Updates found on the provider’s website</h3>
+          ${list.length > 1 ? '<button class="btn btn-sm btn-primary" data-accept="all">Accept all</button>' : ''}
+        </div>
+        <p class="reply-hint">Nothing changes until you accept. Old value is crossed out, the new one is in green.</p>
+        ${list.map(proposalHtml).join('')}
+      </div>` : '';
+    $('#svc-props').querySelectorAll('[data-accept], [data-dismiss]').forEach((b) => b.addEventListener('click', async () => {
+      await saveNow();
+      const accept = b.dataset.accept;
+      b.disabled = true;
+      try {
+        const updated = await api(`/services/${id}/suggestions/${encodeURIComponent(accept || b.dataset.dismiss)}/${accept ? 'accept' : 'dismiss'}`, { method: 'POST' });
+        applySaved(updated);
+        if (accept) {
+          // show the accepted values in the form
+          for (const el of drawer.querySelectorAll('.sf')) {
+            if (document.activeElement !== el) { el.value = updated[el.dataset.f] ?? ''; if (el.classList.contains('auto-grow')) grow(el); }
+          }
+          optRows.innerHTML = updated.options.map((o) => optionEditRow(o)).join('');
+          showSaved('Updated ✓', 'ok');
+        }
+        renderProps();
+      } catch (err) {
+        toast(err.message, 'err');
+        b.disabled = false;
+      }
+    }));
+  }
+  renderProps();
+
+  // --- check the provider's website with Claude ---
+  $('#svc-check').addEventListener('click', async () => {
+    const btn = $('#svc-check');
+    await saveNow();
+    await saving;
+    btn.disabled = true;
+    btn.classList.add('working');
+    const info = $('#svc-check-info');
+    info.className = 'svc-check-info working';
+    info.innerHTML = `<span class="ai-spinner"></span> ${s.website_url ? 'Reading the provider’s website' : 'Looking for the provider’s website'} and comparing it with this page… this can take a minute.`;
+    try {
+      const updated = await api(`/services/${id}/check`, { method: 'POST' });
+      applySaved(updated);
+      info.className = 'svc-check-info';
+      const n = updated.suggestions.length;
+      info.innerHTML = `Checked just now${updated.check_summary ? ` — ${esc(updated.check_summary)}` : ''}${n ? '' : ' <b>No changes needed.</b>'}`;
+      if (updated.provider_text) {
+        $('#svc-provider-text').innerHTML = textToHtml(updated.provider_text);
+        $('#svc-provider-source').classList.remove('hidden');
+      }
+      renderProps();
+      if (n) $('#svc-props').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (err) {
+      info.className = 'svc-check-info err';
+      info.innerHTML = esc(err.message) + (/API key/i.test(err.message) ? ' <a href="#" id="svc-goto-settings">Open Settings</a>' : '');
+      $('#svc-goto-settings')?.addEventListener('click', (e) => { e.preventDefault(); closeServicePage(); showView('settings'); });
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove('working');
+    }
+  });
+
+  $('#svc-delete').addEventListener('click', async () => {
+    if (!confirm(`Delete “${s.service_name}” and all its prices?`)) return;
+    svcPending = null;
+    await api('/services/' + id, { method: 'DELETE' });
+    allServices = allServices.filter((x) => x.id !== id);
+    closeServicePage();
+  });
+}
+
+/* Small message at the bottom of the screen. */
+function toast(msg, kind = '') {
+  let el = $('#toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast';
+    document.body.appendChild(el);
+  }
+  el.className = `toast show ${kind}`;
+  el.textContent = msg;
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => el.classList.remove('show'), kind === 'err' ? 7000 : 4500);
+}
 
 /* ------------------------------------------------------------ clients --- */
 async function loadClients() {
@@ -1404,7 +1643,8 @@ document.addEventListener('keydown', (e) => {
   // close the top-most layer only
   if (!$('#lightbox').classList.contains('hidden')) $('#lightbox').classList.add('hidden');
   else if (!$('#day-backdrop').classList.contains('hidden')) closeDayView();
-  else closeDrawer();
+  else if (!$('#drawer').classList.contains('hidden')) closeDrawer();
+  else if (!$('#svc-drawer').classList.contains('hidden')) closeServicePage();
 });
 
 async function openLead(id) {
@@ -1464,6 +1704,12 @@ async function openLead(id) {
                  placeholder="Add people to copy in — separate with commas" value="${esc(l.reply_cc || '')}" ${canEmail ? '' : 'disabled'}>
         </div>
         <div class="cc-suggest" id="d-cc-suggest"></div>
+        <div class="ai-bar">
+          <button type="button" class="btn btn-ai" id="d-ai" ${canEmail ? '' : 'disabled'}>✨ <span id="d-ai-label">Write with AI</span></button>
+          <input id="d-ai-instr" type="text" autocomplete="off" ${canEmail ? '' : 'disabled'}
+                 placeholder="Tell the AI what to say (optional)">
+        </div>
+        <div class="ai-status hidden" id="d-ai-status"></div>
         <div class="rt-toolbar" id="d-rt-toolbar">
           <button type="button" data-cmd="bold" title="Bold (Ctrl+B)" ${canEmail ? '' : 'disabled'}><b>B</b></button>
           <button type="button" data-cmd="italic" title="Italic (Ctrl+I)" ${canEmail ? '' : 'disabled'}><i>I</i></button>
@@ -1777,11 +2023,54 @@ async function openLead(id) {
   }
   replyBox.addEventListener('input', () => {
     markEmpty();
+    syncAiLabel();
     draftDirty = true;
     clearTimeout(draftTimer);
     draftTimer = setTimeout(saveDraftNow, 800);
   });
   replyBox.addEventListener('blur', saveDraftNow);
+
+  // --- AI helper: writes (or improves) the reply from the services info
+  // pages, the tone of our past replies and this guest's conversations ---
+  const aiStatus = $('#d-ai-status');
+  function syncAiLabel() {
+    $('#d-ai-label').textContent = replyText() ? 'Improve with AI' : 'Write with AI';
+  }
+  syncAiLabel();
+  function showAiStatus(html, kind = '') {
+    aiStatus.className = `ai-status ${kind}`;
+    aiStatus.innerHTML = html;
+  }
+  async function runAi() {
+    const btn = $('#d-ai');
+    if (btn.disabled) return;
+    btn.disabled = true;
+    btn.classList.add('working');
+    const improving = !!replyText();
+    showAiStatus(`<span class="ai-spinner"></span> ${improving ? 'Improving your draft' : 'Reading the conversation and writing a reply'}… this takes about 10–30 seconds.`, 'working');
+    try {
+      const out = await api(`/leads/${id}/ai-draft`, {
+        method: 'POST',
+        body: JSON.stringify({ instructions: $('#d-ai-instr').value, current: improving ? replyText() : '' })
+      });
+      if (!document.body.contains(replyBox)) return; // drawer moved on
+      replyBox.innerHTML = markdownToHtml(out.markdown);
+      markEmpty();
+      replyBox.dispatchEvent(new Event('input'));
+      saveDraftNow();
+      showAiStatus('✨ AI draft — read it over and adjust anything before you send. Your signature is added automatically.', 'done');
+      replyBox.focus();
+    } catch (err) {
+      const needsKey = /API key/i.test(err.message);
+      showAiStatus(`${esc(err.message)}${needsKey ? ' <a href="#" id="d-ai-settings">Open Settings</a>' : ''}`, 'err');
+      $('#d-ai-settings')?.addEventListener('click', (e) => { e.preventDefault(); closeDrawer(); showView('settings'); });
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove('working');
+    }
+  }
+  $('#d-ai').addEventListener('click', runAi);
+  $('#d-ai-instr').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runAi(); } });
 
   // --- Cc: remembered per lead, with one-tap suggestions for anyone else
   // who was on the latest email (a spouse, a travel agent, an assistant) ---
@@ -1960,7 +2249,71 @@ async function openClient(id) {
 }
 
 /* ------------------------------------------------------------ settings --- */
+async function renderAiPanel() {
+  const panel = $('#ai-panel');
+  let st;
+  try { st = await api('/ai/status'); } catch { st = { configured: false }; }
+  panel.innerHTML = st.configured ? `
+    <div class="ai-connected">
+      <span class="ai-orb">✨</span>
+      <div>
+        <div class="who">Claude is connected</div>
+        <div class="reply-hint">API key ${esc(st.hint)}${st.source === 'environment' ? ' (from the server’s ANTHROPIC_API_KEY setting)' : ''}</div>
+      </div>
+      <div class="ai-connected-actions">
+        <button class="btn btn-sm" id="ai-test">Test connection</button>
+        ${st.source === 'settings' ? '<button class="btn btn-sm btn-danger" id="ai-remove">Remove key</button>' : ''}
+      </div>
+    </div>
+    <span class="send-status" id="ai-key-status"></span>
+    <p class="reply-hint" style="margin-top:10px">Used for <b>✨ Write with AI</b> in every lead and <b>✨ Check website</b> on the Services page.
+      A reply costs about 2–6¢, a website check about 10–30¢ (billed by Anthropic to the key’s account).</p>`
+  : `
+    <p class="reply-hint" style="margin-bottom:10px">Connect Claude to write replies for you and keep the Services pages up to date from the providers’ websites.</p>
+    <ol class="steps">
+      <li>Go to <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com → API keys</a> and create a key (add some credit under Billing).</li>
+      <li>Paste it here and press Connect.</li>
+    </ol>
+    <div class="ai-key-row">
+      <input type="password" id="ai-key" autocomplete="off" spellcheck="false" placeholder="sk-ant-…">
+      <button class="btn btn-primary" id="ai-save">Connect</button>
+    </div>
+    <span class="send-status" id="ai-key-status"></span>`;
+
+  const status = $('#ai-key-status');
+  $('#ai-save')?.addEventListener('click', async () => {
+    status.classList.remove('err');
+    status.textContent = 'Checking…';
+    try {
+      await api('/ai/key', { method: 'POST', body: JSON.stringify({ key: $('#ai-key').value }) });
+      await api('/ai/test', { method: 'POST' });
+      await renderAiPanel();
+      $('#ai-key-status').textContent = 'Connected ✓';
+    } catch (err) {
+      status.classList.add('err');
+      status.textContent = err.message;
+    }
+  });
+  $('#ai-test')?.addEventListener('click', async () => {
+    status.classList.remove('err');
+    status.textContent = 'Testing…';
+    try {
+      await api('/ai/test', { method: 'POST' });
+      status.textContent = 'Working ✓';
+    } catch (err) {
+      status.classList.add('err');
+      status.textContent = err.message;
+    }
+  });
+  $('#ai-remove')?.addEventListener('click', async () => {
+    if (!confirm('Remove the Claude API key? The AI buttons stop working until you add one again.')) return;
+    await api('/ai/key', { method: 'DELETE' });
+    renderAiPanel();
+  });
+}
+
 async function loadSettings() {
+  renderAiPanel();
   const s = await api('/gmail/status');
   gmailStatus = s;
   updateGmailDot();

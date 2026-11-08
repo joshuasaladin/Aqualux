@@ -5,13 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Aqualux CRM</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💧</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Cormorant+Garamond:wght@600;700&display=swap" rel="stylesheet">
+<meta name="theme-color" content="#0a1a2b">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <div id="login-screen" class="login-screen hidden">
   <div class="login-card">
-    <div class="brand"><span class="brand-drop">💧</span> Aqualux <span class="brand-sub">CRM</span></div>
+    <div class="brand"><span class="brand-mark">AL</span><span class="brand-name">Aqua Lux</span></div>
     <p>Enter your admin password to continue.</p>
     <form id="login-form">
       <input type="password" id="login-password" placeholder="Password" autocomplete="current-password" required>
@@ -24,7 +28,7 @@
 <div id="app" class="hidden">
   <header class="topbar">
     <div class="topbar-row1">
-      <div class="brand"><span class="brand-drop">💧</span> Aqualux <span class="brand-sub">Concierge CRM</span></div>
+      <div class="brand"><span class="brand-mark">AL</span><span class="brand-name">Aqua Lux</span> <span class="brand-sub">Concierge CRM</span></div>
       <button class="btn btn-primary btn-newlead-top" id="btn-new-lead">+ New lead</button>
       <button class="hamburger" id="hamburger-btn" aria-label="Menu">☰</button>
     </div>
@@ -33,11 +37,11 @@
       <button class="nav-btn" data-view="bookings">Bookings</button>
       <button class="nav-btn" data-view="calendar">Calendar</button>
       <button class="nav-btn" data-view="payments">Payments</button>
+      <button class="nav-btn" data-view="services">Services</button>
       <div class="nav-dropdown" id="other-dropdown">
         <button class="nav-btn" id="other-toggle">Other ▾</button>
         <div class="nav-dropdown-menu hidden" id="other-menu">
           <button class="nav-dropdown-item" data-view="clients">Clients</button>
-          <button class="nav-dropdown-item" data-view="services">Services</button>
         </div>
       </div>
       <button class="nav-btn" data-view="settings">Settings <span id="gmail-dot" class="dot dot-off" title="Gmail not connected"></span></button>
@@ -47,6 +51,12 @@
   <main>
     <!-- ============================== LEADS ============================== -->
     <section id="view-leads" class="view">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Leads</h1>
+          <p class="page-sub" id="leads-date"></p>
+        </div>
+      </div>
       <div class="stat-grid" id="stat-grid"></div>
       <div class="filters">
         <input type="search" id="lead-search" placeholder="Search name, email, phone, service, notes…">
@@ -130,15 +140,30 @@
 
     <!-- ============================ SERVICES ============================= -->
     <section id="view-services" class="view hidden">
-      <div class="filters">
-        <input type="search" id="service-search" placeholder="Search category, company, service…">
-        <button class="btn btn-primary" id="btn-add-service">+ Add service</button>
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Services</h1>
+          <p class="page-sub">Everything about each service in one place. The AI reads these pages when it writes replies.</p>
+        </div>
+        <div class="page-actions">
+          <button class="btn btn-ai" id="btn-check-all" title="Compare every service with its provider’s website">✨ Check websites</button>
+          <button class="btn" id="btn-import-site" title="Fill in empty pages from aqualuxaruba.com">⟳ Import from our website</button>
+          <button class="btn btn-primary" id="btn-add-service">+ Add service</button>
+        </div>
       </div>
-      <div id="service-groups"></div>
+      <div class="svc-toolbar">
+        <input type="search" id="service-search" placeholder="Search services and providers…">
+        <div class="chip-row" id="svc-cats"></div>
+      </div>
+      <div id="svc-review-note" class="svc-review-note hidden"></div>
+      <div id="svc-progress" class="svc-progress hidden"></div>
+      <div id="service-grid" class="svc-grid"></div>
     </section>
 
     <!-- ============================ SETTINGS ============================= -->
     <section id="view-settings" class="view hidden">
+      <h2>AI assistant</h2>
+      <div class="panel" id="ai-panel"></div>
       <h2>Gmail connection</h2>
       <div class="panel" id="gmail-panel"></div>
       <h2>Email signature</h2>
@@ -176,6 +201,12 @@
 <div id="drawer-backdrop" class="drawer-backdrop hidden"></div>
 <aside id="drawer" class="drawer hidden">
   <div id="drawer-content"></div>
+</aside>
+
+<!-- ======================= SERVICE INFO PAGE (sheet) ===================== -->
+<div id="svc-backdrop" class="drawer-backdrop hidden"></div>
+<aside id="svc-drawer" class="drawer svc-drawer hidden" aria-label="Service">
+  <div id="svc-drawer-content"></div>
 </aside>
 
 <!-- =========================== NEW LEAD MODAL =========================== -->
@@ -248,11 +279,14 @@
     <h2>Add service</h2>
     <form id="service-form">
       <div class="form-row">
-        <label>Category *<input name="category" required list="category-list"></label>
         <label>Service *<input name="service_name" required></label>
+        <label>Category *<input name="category" required list="category-list"></label>
       </div>
-      <label>Company / Provider<input name="company"></label>
-      <p class="reply-hint">Add pricing options, contact info and more after creating — click the service to expand it.</p>
+      <div class="form-row">
+        <label>Provider (company)<input name="company"></label>
+        <label>Provider website<input name="website_url" type="url" inputmode="url" placeholder="https://"></label>
+      </div>
+      <p class="reply-hint">Prices and all other details go on the service’s page, which opens next.</p>
       <div class="modal-actions">
         <button type="button" class="btn" id="service-cancel">Cancel</button>
         <button type="submit" class="btn btn-primary">Create service</button>

@@ -239,6 +239,27 @@ ensureColumn('lead_services', 'service_time', 'service_time TEXT');
 ensureColumn('lead_services', 'gcal_event_id', 'gcal_event_id TEXT');
 // fingerprint of what was last sent to Google, so unchanged events aren't re-sent
 ensureColumn('lead_services', 'gcal_sig', 'gcal_sig TEXT');
+
+// Service info pages: everything we know about a service (from our own
+// website, the provider's website and our notes). The AI reply helper reads
+// these. website_url is the PROVIDER's site; page_url is our page about it.
+for (const [col, def] of [
+  ['website_url', `website_url TEXT DEFAULT ''`],
+  ['page_url', `page_url TEXT DEFAULT ''`],
+  ['image_url', `image_url TEXT DEFAULT ''`],
+  ['summary', `summary TEXT DEFAULT ''`],
+  ['included', `included TEXT DEFAULT ''`],
+  ['duration', `duration TEXT DEFAULT ''`],
+  ['location', `location TEXT DEFAULT ''`],
+  ['good_to_know', `good_to_know TEXT DEFAULT ''`],
+  ['cancellation_policy', `cancellation_policy TEXT DEFAULT ''`],
+  ['website_prices', `website_prices TEXT DEFAULT ''`],
+  ['website_text', `website_text TEXT DEFAULT ''`],
+  ['provider_text', `provider_text TEXT DEFAULT ''`],
+  ['checked_at', 'checked_at TEXT'],
+  ['check_summary', `check_summary TEXT DEFAULT ''`],
+  ['suggestions', `suggestions TEXT DEFAULT '[]'`]
+]) ensureColumn('services', col, def);
 ensureColumn('leads', 'gcal_sig', 'gcal_sig TEXT');
 // Each booked service is confirmed on its own; a lead counts as confirmed
 // when any of its services is. Start time also lives on the service now.

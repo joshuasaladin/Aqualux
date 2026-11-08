@@ -6,6 +6,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { db, dataDir, touchLead, upsertClient, setSetting, getSetting, markThreadProcessed, LEAD_ORDER } from './db.js';
 import * as gmail from './gmail.js';
 import { SERVICE_CATALOG } from './services-catalog.js';
+import { WEBSITE_CATALOG } from './website-catalog.js';
+import * as ai from './ai.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -714,27 +716,64 @@ function getServiceFull(id) {
   if (!svc) return null;
   svc.options = db.prepare(`
     SELECT * FROM service_options WHERE service_id = ? ORDER BY sort_order, id`).all(id);
+  svc.suggestions = parseSuggestions(svc.suggestions);
   return svc;
 }
 
+function parseSuggestions(v) {
+  try { const a = JSON.parse(v || '[]'); return Array.isArray(a) ? a : []; } catch { return []; }
+}
+
+// Text fields of a service that can be edited on its info page.
+const SERVICE_TEXT_FIELDS = [
+  'category', 'wix_form_name', 'service_name', 'company', 'contact', 'booking_method',
+  'info_needed', 'commission', 'internal_notes', 'website_url', 'page_url', 'image_url',
+  'summary', 'included', 'duration', 'location', 'good_to_know', 'cancellation_policy', 'website_prices'
+];
+
+// Saves a service's price options in the order given. Existing options are
+// updated in place (so their ids stay the same — the website-check proposals
+// refer to them); new ones are added and their ids returned by their `key`;
+// options no longer in the list are removed.
 function saveOptions(serviceId, options) {
-  db.prepare(`DELETE FROM service_options WHERE service_id = ?`).run(serviceId);
-  if (!Array.isArray(options)) return;
+  const newIds = {};
+  if (!Array.isArray(options)) return newIds;
+  const existing = new Set(db.prepare(`SELECT id FROM service_options WHERE service_id = ?`)
+    .all(serviceId).map((r) => r.id));
+  const keep = new Set();
+  const upd = db.prepare(`
+    UPDATE service_options SET option_name = ?, price = ?, price_unit = ?, child_price = ?,
+      min_people = ?, max_people = ?, downpayment_percent = ?, downpayment_fixed = ?,
+      downpayment_per_person = ?, timing = ?, notes = ?, sort_order = ?
+    WHERE id = ? AND service_id = ?`);
   const ins = db.prepare(`
-    INSERT INTO service_options (service_id, option_name, price, price_unit, child_price,
+    INSERT INTO service_options (option_name, price, price_unit, child_price,
       min_people, max_people, downpayment_percent, downpayment_fixed, downpayment_per_person,
-      timing, notes, sort_order)
+      timing, notes, sort_order, service_id)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   options.forEach((o, i) => {
     if (!o) return;
-    if (!o.option_name && !o.price && !o.notes) return; // skip fully-blank rows
-    ins.run(serviceId, String(o.option_name || '').slice(0, 200),
+    const vals = [String(o.option_name || '').slice(0, 200),
       Number(o.price) || 0, OPTION_UNITS.includes(o.price_unit) ? o.price_unit : 'per_person',
       Number(o.child_price) || 0,
       o.min_people ? parseInt(o.min_people, 10) : null, o.max_people ? parseInt(o.max_people, 10) : null,
       Number(o.downpayment_percent) || 0, Number(o.downpayment_fixed) || 0, o.downpayment_per_person ? 1 : 0,
-      String(o.timing || '').slice(0, 200), String(o.notes || '').slice(0, 1000), i);
+      String(o.timing || '').slice(0, 200), String(o.notes || '').slice(0, 1000), i];
+    const oid = Number(o.id);
+    if (oid && existing.has(oid)) {
+      upd.run(...vals, oid, serviceId);
+      keep.add(oid);
+    } else {
+      if (!o.option_name && !Number(o.price) && !o.notes) return; // fully blank new row
+      const id = Number(ins.run(...vals, serviceId).lastInsertRowid);
+      keep.add(id);
+      if (o.key) newIds[o.key] = id;
+    }
   });
+  for (const id of existing) {
+    if (!keep.has(id)) db.prepare(`DELETE FROM service_options WHERE id = ?`).run(id);
+  }
+  return newIds;
 }
 
 app.get('/api/services', (req, res) => {
@@ -750,7 +789,10 @@ app.get('/api/services', (req, res) => {
     if (!byService.has(o.service_id)) byService.set(o.service_id, []);
     byService.get(o.service_id).push(o);
   }
-  for (const s of services) s.options = byService.get(s.id) || [];
+  for (const s of services) {
+    s.options = byService.get(s.id) || [];
+    s.suggestions = parseSuggestions(s.suggestions);
+  }
   res.json(services);
 });
 
@@ -758,43 +800,31 @@ app.post('/api/services', (req, res) => {
   const b = req.body || {};
   if (!b.service_name?.trim()) return res.status(400).json({ error: 'Service name is required' });
   const info = db.prepare(`
-    INSERT INTO services (category, wix_form_name, service_name, company, contact,
-      booking_method, info_needed, commission, internal_notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(
-      String(b.category || '').trim(), String(b.wix_form_name || '').trim(),
-      String(b.service_name || '').trim(), String(b.company || '').trim(),
-      String(b.contact || '').trim(), String(b.booking_method || '').trim(),
-      String(b.info_needed || '').trim(), String(b.commission || '').trim(),
-      String(b.internal_notes || '').trim()
-    );
-  if (Array.isArray(b.options)) saveOptions(info.lastInsertRowid, b.options);
-  res.status(201).json(getServiceFull(info.lastInsertRowid));
+    INSERT INTO services (${SERVICE_TEXT_FIELDS.join(', ')})
+    VALUES (${SERVICE_TEXT_FIELDS.map(() => '?').join(', ')})`)
+    .run(...SERVICE_TEXT_FIELDS.map((f) => String(b[f] ?? '').trim().slice(0, 20000)));
+  const newIds = saveOptions(Number(info.lastInsertRowid), b.options);
+  res.status(201).json({ ...getServiceFull(info.lastInsertRowid), new_option_ids: newIds });
 });
 
 app.patch('/api/services/:id', (req, res) => {
   const svc = db.prepare(`SELECT * FROM services WHERE id = ?`).get(req.params.id);
   if (!svc) return res.status(404).json({ error: 'Not found' });
   const b = req.body || {};
-  const fields = {
-    category: b.category, wix_form_name: b.wix_form_name, service_name: b.service_name,
-    company: b.company, contact: b.contact, booking_method: b.booking_method,
-    info_needed: b.info_needed, commission: b.commission, internal_notes: b.internal_notes
-  };
   const sets = [];
   const params = [];
-  for (const [k, v] of Object.entries(fields)) {
-    if (v === undefined) continue;
+  for (const k of SERVICE_TEXT_FIELDS) {
+    if (b[k] === undefined) continue;
     sets.push(`${k} = ?`);
-    params.push(String(v).trim());
+    params.push(String(b[k] ?? '').trim().slice(0, 20000));
   }
   if (sets.length) {
     sets.push(`updated_at = datetime('now')`);
     params.push(req.params.id);
     db.prepare(`UPDATE services SET ${sets.join(', ')} WHERE id = ?`).run(...params);
   }
-  if (Array.isArray(b.options)) saveOptions(req.params.id, b.options);
-  res.json(getServiceFull(req.params.id));
+  const newIds = saveOptions(Number(req.params.id), b.options);
+  res.json({ ...getServiceFull(req.params.id), new_option_ids: newIds });
 });
 
 app.delete('/api/services/:id', (req, res) => {
@@ -807,6 +837,109 @@ app.delete('/api/services/:id', (req, res) => {
 // retry if an earlier import was interrupted (e.g. by a server restart).
 app.post('/api/services/reimport', (req, res) => {
   res.json(seedServiceCatalog());
+});
+
+// Fill the info pages from www.aqualuxaruba.com (only empty fields; prices
+// and options of existing services are never changed) and add services that
+// are on the website but not in the CRM yet.
+app.post('/api/services/import-website', (req, res) => {
+  res.json(importWebsiteCatalog());
+});
+
+// Read the provider's website with Claude and store proposed changes.
+app.post('/api/services/:id/check', async (req, res) => {
+  const svc = getServiceFull(req.params.id);
+  if (!svc) return res.status(404).json({ error: 'Not found' });
+  try {
+    const data = await ai.checkWebsite(svc);
+    const proposals = ai.proposalsFrom(svc, data);
+    db.prepare(`
+      UPDATE services SET provider_text = ?, check_summary = ?, suggestions = ?,
+        checked_at = datetime('now') WHERE id = ?`)
+      .run(String(data.page_text || svc.provider_text || '').slice(0, 8000),
+        String(data.summary || '').slice(0, 2000), JSON.stringify(proposals), svc.id);
+    res.json(getServiceFull(svc.id));
+  } catch (err) {
+    const e = ai.friendlyError(err);
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+function applyProposal(svc, p) {
+  if (p.kind === 'field') {
+    if (!SERVICE_TEXT_FIELDS.includes(p.field)) return;
+    db.prepare(`UPDATE services SET ${p.field} = ?, updated_at = datetime('now') WHERE id = ?`)
+      .run(String(p.new_value ?? ''), svc.id);
+  } else if (p.kind === 'option') {
+    const o = p.option || {};
+    const unit = OPTION_UNITS.includes(o.price_unit) ? o.price_unit : 'per_person';
+    if (p.action === 'update') {
+      db.prepare(`
+        UPDATE service_options SET option_name = ?, price = ?, child_price = ?, price_unit = ?,
+          timing = ?, notes = ? WHERE id = ? AND service_id = ?`)
+        .run(String(o.option_name || ''), Number(o.price) || 0, Number(o.child_price) || 0, unit,
+          String(o.timing || ''), String(o.notes || ''), p.option_id, svc.id);
+    } else {
+      const next = db.prepare(`SELECT COALESCE(MAX(sort_order), -1) + 1 n FROM service_options WHERE service_id = ?`).get(svc.id).n;
+      db.prepare(`
+        INSERT INTO service_options (service_id, option_name, price, price_unit, child_price, timing, notes, sort_order)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(svc.id, String(o.option_name || ''), Number(o.price) || 0, unit, Number(o.child_price) || 0,
+          String(o.timing || ''), String(o.notes || ''), next);
+    }
+    db.prepare(`UPDATE services SET updated_at = datetime('now') WHERE id = ?`).run(svc.id);
+  }
+}
+
+// Accept one proposal (or "all"), or dismiss one.
+app.post('/api/services/:id/suggestions/:sid/:action', (req, res) => {
+  const svc = getServiceFull(req.params.id);
+  if (!svc) return res.status(404).json({ error: 'Not found' });
+  const { sid, action } = req.params;
+  if (!['accept', 'dismiss'].includes(action)) return res.status(400).json({ error: 'Unknown action' });
+  const pick = (p) => sid === 'all' || p.id === sid;
+  if (action === 'accept') for (const p of svc.suggestions.filter(pick)) applyProposal(svc, p);
+  const left = svc.suggestions.filter((p) => !pick(p));
+  db.prepare(`UPDATE services SET suggestions = ? WHERE id = ?`).run(JSON.stringify(left), svc.id);
+  res.json(getServiceFull(svc.id));
+});
+
+// ---------------------------------------------------------- AI assistant --
+app.get('/api/ai/status', (req, res) => res.json(ai.aiStatus()));
+
+app.post('/api/ai/key', (req, res) => {
+  const key = String(req.body?.key || '').trim();
+  if (!key) return res.status(400).json({ error: 'Paste the API key first' });
+  if (!/^sk-ant-/.test(key)) return res.status(400).json({ error: 'That doesn’t look like a Claude API key (they start with sk-ant-).' });
+  setSetting('anthropic_api_key', key);
+  res.json(ai.aiStatus());
+});
+
+app.delete('/api/ai/key', (req, res) => {
+  setSetting('anthropic_api_key', '');
+  res.json(ai.aiStatus());
+});
+
+app.post('/api/ai/test', async (req, res) => {
+  try {
+    res.json(await ai.testConnection());
+  } catch (err) {
+    const e = ai.friendlyError(err);
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+app.post('/api/leads/:id/ai-draft', async (req, res) => {
+  try {
+    const out = await ai.draftReply(Number(req.params.id), {
+      instructions: req.body?.instructions || '',
+      currentDraft: req.body?.current || ''
+    });
+    res.json(out);
+  } catch (err) {
+    const e = ai.friendlyError(err);
+    res.status(e.status || 500).json({ error: e.message });
+  }
 });
 
 // ------------------------------------------------------------ calendar ----
@@ -999,6 +1132,61 @@ function seedServiceCatalog() {
   return { ok: errors.length === 0, created, skipped, options: optionsInserted, errors };
 }
 seedServiceCatalog();
+
+function importWebsiteCatalog() {
+  const FILL = ['page_url', 'image_url', 'summary', 'included', 'duration', 'location',
+    'good_to_know', 'cancellation_policy', 'website_prices', 'company'];
+  let filled = 0, created = 0;
+  const errors = [];
+  for (const w of WEBSITE_CATALOG) {
+    try {
+      let targets = w.match.length
+        ? db.prepare(`SELECT * FROM services WHERE wix_form_name IN (${w.match.map(() => '?').join(',')})`).all(...w.match)
+        : [];
+      if (!targets.length) {
+        targets = db.prepare(`SELECT * FROM services WHERE lower(service_name) = lower(?)`).all(w.service_name);
+      }
+      if (!targets.length) {
+        const info = db.prepare(`
+          INSERT INTO services (category, wix_form_name, service_name, company)
+          VALUES (?, ?, ?, ?)`).run(w.category, w.service_name, w.service_name, w.company || '');
+        const id = Number(info.lastInsertRowid);
+        (w.options || []).forEach((o, i) => {
+          db.prepare(`
+            INSERT INTO service_options (service_id, option_name, price, price_unit, child_price,
+              max_people, timing, notes, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .run(id, o.option_name, o.price || 0, o.price_unit || 'per_person', o.child_price || 0,
+              o.max_people ?? null, o.timing || '', o.notes || '', i);
+        });
+        targets = [db.prepare(`SELECT * FROM services WHERE id = ?`).get(id)];
+        created++;
+      }
+      for (const t of targets) {
+        const sets = [];
+        const params = [];
+        for (const f of FILL) {
+          const v = w[f === 'image_url' ? 'image' : f];
+          if (v && !String(t[f] || '').trim()) { sets.push(`${f} = ?`); params.push(v); }
+        }
+        // the copy of our own web page is not edited by hand: keep it current
+        if (w.website_text && t.website_text !== w.website_text) { sets.push('website_text = ?'); params.push(w.website_text); }
+        if (!sets.length) continue;
+        db.prepare(`UPDATE services SET ${sets.join(', ')} WHERE id = ?`).run(...params, t.id);
+        filled++;
+      }
+    } catch (err) {
+      errors.push(`${w.service_name}: ${err.message}`);
+    }
+  }
+  if (errors.length) console.error('[website import] errors:', errors);
+  if (filled || created) console.log(`Website import: ${filled} service page(s) filled in, ${created} service(s) added.`);
+  return { ok: !errors.length, filled, created, errors };
+}
+if (!getSetting('website_import_v1', false)) {
+  importWebsiteCatalog();
+  setSetting('website_import_v1', true);
+}
 
 // One-time cleanup: remove leads/clients mistakenly created from payment-
 // service notification emails before the sender gate existed. Their threads
