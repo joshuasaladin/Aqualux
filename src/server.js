@@ -827,7 +827,17 @@ app.patch('/api/services/:id', (req, res) => {
   res.json({ ...getServiceFull(req.params.id), new_option_ids: newIds });
 });
 
+// Services someone deleted on purpose: the spreadsheet and website imports
+// never bring these back.
+const deletedServiceNames = () => new Set((getSetting('deleted_services', []) || []).map((n) => String(n).toLowerCase()));
+function rememberDeleted(name) {
+  const list = getSetting('deleted_services', []) || [];
+  if (name && !list.some((n) => n.toLowerCase() === name.toLowerCase())) setSetting('deleted_services', [...list, name]);
+}
+
 app.delete('/api/services/:id', (req, res) => {
+  const svc = db.prepare(`SELECT service_name FROM services WHERE id = ?`).get(req.params.id);
+  if (svc) rememberDeleted(svc.service_name);
   db.prepare(`DELETE FROM services WHERE id = ?`).run(req.params.id);
   res.json({ ok: true });
 });
@@ -1098,7 +1108,9 @@ function seedServiceCatalog() {
 
   let created = 0, skipped = 0, optionsInserted = 0;
   const errors = [];
+  const deleted = deletedServiceNames();
   for (const s of SERVICE_CATALOG) {
+    if (deleted.has(s.service_name.toLowerCase())) continue;
     let serviceId;
     const existing = findExisting.get(s.category, s.service_name, s.wix_form_name);
     if (existing) {
@@ -1139,13 +1151,30 @@ function seedServiceCatalog() {
   }
   return { ok: errors.length === 0, created, skipped, options: optionsInserted, errors };
 }
-seedServiceCatalog();
+// Not offered (not on aqualuxaruba.com): the self-drive rentals that came
+// in with the spreadsheet. Removed once, and never imported again.
+if (!getSetting('removed_self_drive_v1', false)) {
+  for (const name of ['ATV Rental (self-drive)', 'UTV Rental (self-drive)']) {
+    rememberDeleted(name);
+    const gone = db.prepare(`DELETE FROM services WHERE service_name = ?`).run(name);
+    if (gone.changes) console.log(`Removed service: ${name}`);
+  }
+  setSetting('removed_self_drive_v1', true);
+}
+
+// The spreadsheet import runs at startup until it has gone through once
+// without errors; after that, prices or options someone removed stay removed.
+if (!getSetting('sheet_import_complete', false)) {
+  const r = seedServiceCatalog();
+  if (r.ok) setSetting('sheet_import_complete', true);
+}
 
 function importWebsiteCatalog() {
   const FILL = ['page_url', 'image_url', 'summary', 'included', 'duration', 'location',
     'good_to_know', 'cancellation_policy', 'website_prices', 'company'];
   let filled = 0, created = 0;
   const errors = [];
+  const deleted = deletedServiceNames();
   for (const w of WEBSITE_CATALOG) {
     try {
       let targets = w.match.length
@@ -1155,6 +1184,7 @@ function importWebsiteCatalog() {
         targets = db.prepare(`SELECT * FROM services WHERE lower(service_name) = lower(?)`).all(w.service_name);
       }
       if (!targets.length) {
+        if (deleted.has(w.service_name.toLowerCase())) continue;
         const info = db.prepare(`
           INSERT INTO services (category, wix_form_name, service_name, company)
           VALUES (?, ?, ?, ?)`).run(w.category, w.service_name, w.service_name, w.company || '');
