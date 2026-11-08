@@ -305,7 +305,13 @@ for (const [col, def] of [
   ['provider_text', `provider_text TEXT DEFAULT ''`],
   ['checked_at', 'checked_at TEXT'],
   ['check_summary', `check_summary TEXT DEFAULT ''`],
-  ['suggestions', `suggestions TEXT DEFAULT '[]'`]
+  ['suggestions', `suggestions TEXT DEFAULT '[]'`],
+  // what the last provider check changed (and how to undo it), and what
+  // doesn't match on our own website
+  ['last_changes', `last_changes TEXT DEFAULT '[]'`],
+  ['undo_snapshot', `undo_snapshot TEXT DEFAULT ''`],
+  ['site_issues', `site_issues TEXT DEFAULT '[]'`],
+  ['site_checked_at', 'site_checked_at TEXT']
 ]) ensureColumn('services', col, def);
 ensureColumn('leads', 'gcal_sig', 'gcal_sig TEXT');
 // Each booked service is confirmed on its own; a lead counts as confirmed

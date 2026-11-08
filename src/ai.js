@@ -2,9 +2,11 @@
 //   1. draftReply   — writes a reply to a guest, using the Services info
 //                     pages, the tone of our past replies, and everything in
 //                     this guest's conversations so far.
-//   2. checkWebsite — reads a provider's website and proposes updates for a
-//                     service's info page (prices, what's included, times…).
-//                     Nothing is changed until someone accepts a proposal.
+//   2. checkService — keeps a service's info page right, in this order:
+//                     the provider's own website first (its prices and info
+//                     are applied to the CRM); without one, what the team
+//                     entered in the CRM. Then it compares that with our own
+//                     page on aqualuxaruba.com and lists what to fix there.
 //
 // The API key comes from Settings → AI assistant, or the ANTHROPIC_API_KEY
 // environment variable.
@@ -158,8 +160,8 @@ export function servicesKnowledge() {
     add('Internal notes (for the team, never quote to guests)', s.internal_notes);
     const o = opts.filter((x) => x.service_id === s.id);
     if (o.length) lines.push('Our prices (use these when quoting):', ...o.map(optionLine));
-    add('Prices as shown on our public website', s.website_prices);
-    if (s.website_text) lines.push(`Our website page says:\n${clip(s.website_text, 2500)}`);
+    // our public page can be behind; the information above wins
+    if (s.website_text) lines.push(`Our public website page (background only — it can be out of date; where it differs from the information above, the information above is correct, and never quote its prices):\n${clip(s.website_text, 2500)}`);
     if (s.provider_text) lines.push(`Provider website (checked ${String(s.checked_at || '').slice(0, 10)}):\n${clip(s.provider_text, 2500)}`);
     parts.push(lines.join('\n'));
   }
@@ -378,19 +380,84 @@ function parseJson(text) {
   return null;
 }
 
-export async function checkWebsite(service) {
-  const url = String(service.website_url || '').trim();
-  const host = hostOf(url);
-  const bare = host.replace(/^www\./, '');
-  const tools = [];
-  if (url && host) {
-    tools.push({ type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 8, allowed_domains: [...new Set([host, bare])] });
-  } else {
-    tools.push({ type: 'web_search_20260209', name: 'web_search', max_uses: 4 });
-    tools.push({ type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 6 });
+// ---------------------------------------------------- our own web page ----
+// The visible text of one of our aqualuxaruba.com service pages, without the
+// menu, the inquiry form and the footer.
+export function pageText(html) {
+  let h = String(html || '')
+    .replace(/<head[\s\S]*?<\/head>/i, '')
+    .replace(/<(script|style|noscript|svg)\b[\s\S]*?<\/\1>/gi, '')
+    .replace(/<(br|p|div|li|h[1-6]|span|section|tr)\b[^>]*>/gi, '\n')
+    .replace(/<[^>]+>/g, '');
+  h = h.replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
+    .replace(/&#(\d+);/g, (m, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (m, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/​/g, '');
+  const lines = [];
+  for (const raw of h.split('\n')) {
+    const l = raw.replace(/\s+/g, ' ').trim();
+    if (l && lines[lines.length - 1] !== l) lines.push(l);
   }
+  let t = lines.join('\n');
+  const marker = 'Use tab to navigate through the menu items.';
+  if (t.includes(marker)) t = t.slice(t.indexOf(marker) + marker.length);
+  const tail = t.includes('Inquire Now!') ? t.slice(t.indexOf('Inquire Now!')) : '';
+  for (const cut of ['Inquire Now!', 'Social Media', 'bottom of page']) {
+    if (t.includes(cut)) t = t.slice(0, t.indexOf(cut));
+  }
+  const arrive = tail.match(/Please arrive[^\n]*/);
+  return (t.trim() + (arrive ? `\n${arrive[0]}` : '')).trim();
+}
+
+export async function fetchOurPage(url) {
+  const res = await fetch(url, { headers: { 'User-Agent': 'AquaLuxCRM/1.0' }, signal: AbortSignal.timeout(20000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const text = pageText(await res.text());
+  if (text.length < 40) throw new Error('page had no readable text');
+  return text;
+}
+
+// ------------------------------------------------------- service check ----
+const SITE_ISSUES = {
+  type: 'array',
+  description: 'What is wrong or missing on our own website page, compared with the correct information.',
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['topic', 'website_says', 'should_say'],
+    properties: {
+      topic: { type: 'string', description: 'What it is about, e.g. "Sunset Tour price" or "Cancellation policy"' },
+      website_says: { type: 'string', description: 'What our website shows now ("Not on the website" if missing)' },
+      should_say: { type: 'string', description: 'The correct information to put on the website' }
+    }
+  }
+};
+const COMPARE_ONLY_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['summary', 'site_issues'],
+  properties: {
+    summary: { type: 'string', description: 'One or two sentences for the team.' },
+    site_issues: SITE_ISSUES
+  }
+};
+const CHECK_WITH_SITE_SCHEMA = {
+  ...CHECK_SCHEMA,
+  required: [...CHECK_SCHEMA.required, 'site_issues'],
+  properties: { ...CHECK_SCHEMA.properties, site_issues: SITE_ISSUES }
+};
+
+const COMPARE_RULES = `Comparing with our own website (site_issues):
+- List every price that is different on our website, and every price option that is missing there.
+- List facts that are different on our website: times, duration, what is included, age or other requirements, meeting point, cancellation policy, provider name. Also list important facts (prices, times, policies) that are missing from our website.
+- Don't list differences in wording, style or level of detail, and don't list things our website has that the correct information simply doesn't mention.
+- website_says: quote or summarize what our website shows now ("Not on the website" if missing). should_say: exactly what it should say instead.
+- If our website already matches, return an empty list.`;
+
+function serviceSummary(service) {
   const opts = service.options || [];
-  const current = [
+  return [
     `Service: ${service.service_name}`,
     `Category: ${service.category || ''}`,
     `Provider: ${service.company || '(unknown)'}`,
@@ -400,40 +467,74 @@ export async function checkWebsite(service) {
     'Price options:',
     ...(opts.length ? opts.map((o) => `${optionLine(o)} [option_id ${o.id}, unit ${o.price_unit}]`) : ['(none)'])
   ].join('\n');
+}
 
-  const where = url
-    ? `The provider's website is ${url} — fetch it, and follow links on that site to the page(s) about this service and its prices if needed. Use only that website.`
-    : `We don't have the provider's website yet. Search for the official website of "${service.company || service.service_name}" in Aruba (the provider of this service), then fetch it. Use only the provider's own official website — not TripAdvisor, Viator, GetYourGuide, Expedia, Facebook or other resellers. Put the URL you used in website_url.`;
+// With a provider website: read it, correct our info from it, and compare
+// the corrected info with our own page. Without one: our CRM info is the
+// correct information; only compare it with our own page.
+export async function checkService(service, ourPageText) {
+  const url = String(service.website_url || '').trim();
+  const host = hostOf(url);
+  const ourPage = String(ourPageText || '').trim()
+    ? `<our_website_page url="${service.page_url || 'www.aqualuxaruba.com'}">\n${clip(ourPageText, 12000)}\n</our_website_page>`
+    : '<our_website_page>(we have no page for this service on aqualuxaruba.com)</our_website_page>';
 
-  const prompt = `You keep the service information pages of Aqua Lux Aruba (a concierge company) up to date with what the providers publish on their own websites.
+  if (!url || !host) {
+    const prompt = `You help Aqua Lux Aruba (a concierge company) keep its public website www.aqualuxaruba.com correct.
 
-${where}
+The information in our CRM below is CORRECT — the team keeps it up to date by hand. Compare our own website page with it and list what has to be fixed on the website.
 
-Here is what we currently have for this service:
+<correct_information>
+${serviceSummary(service)}
+</correct_information>
+
+${ourPage}
+
+${COMPARE_RULES}`;
+    const resp = await run({
+      max_tokens: 16000,
+      output_config: { effort: 'medium', format: { type: 'json_schema', schema: COMPARE_ONLY_SCHEMA } },
+      messages: [{ role: 'user', content: prompt }]
+    }, `site compare service ${service.id}`);
+    const data = parseJson(finalText(resp));
+    if (!data) throw new AiError('Could not read Claude’s answer. Try again.', 502);
+    return { mode: 'compare', ...data };
+  }
+
+  const bare = host.replace(/^www\./, '');
+  const prompt = `You keep the service information of Aqua Lux Aruba (a concierge company) correct. The provider's own website is the most reliable source: what it shows wins over what we have.
+
+The provider's website is ${url} — fetch it, and follow links on that site to the page(s) about this service and its prices if needed. Use only that website.
+
+What we have now in our CRM:
 <current>
-${current}
+${serviceSummary(service)}
 </current>
 
-Compare the provider's website with what we have and propose changes:
-- option_changes: when the website's price for an option differs from ours, propose an "update" with the option_id and the website's price (keep our option name unless the website clearly renamed it; keep our unit, timing and notes unless the website shows different ones). The website often uses different names for the same thing (for example our "Brunch Tour" may be called "Aqua Champagne Brunch Cruise" there, or our "Sunset Tour" a "Sunset Cruise") — match them by what they are (time of day, duration, type) and propose an "update" of our option, never an "add". Propose "add" (option_id 0) only for options that really have no match in ours (for example a dinner package we don't list). Don't propose removing options.
-- field_changes: propose a new value for a field only when the website clearly shows different or missing information (for example new times, a new inclusion, a changed policy). Write the full new value for the field, in the same short style as ours (one item per line for lists). Leave out changes that are only wording.
-- Only propose what the website clearly supports. If something is unclear, or the website shows no prices, propose nothing for it and say so in the summary.
-- If you could not find the service on the website, set found to false, explain in the summary, and propose no changes.
-- page_text: the useful facts you read, so the team (and the reply assistant) can use them later.`;
+Step 1 — correct our CRM from the provider's website (these changes are applied automatically):
+- option_changes: when the provider's price for an option differs from ours, an "update" with the option_id and the provider's price (keep our option name unless the provider clearly renamed it; keep our unit, timing and notes unless the provider shows different ones). The provider often uses different names for the same thing (our "Brunch Tour" may be their "Aqua Champagne Brunch Cruise", our "Sunset Tour" their "Sunset Cruise") — match them by what they are (time of day, duration, type) and use "update", never "add". Use "add" (option_id 0) only for options with no match in ours. Never remove options.
+- field_changes: a new value for a field only when the provider clearly shows different or missing information (new times, a new inclusion, a changed policy). Write the full new value for the field, in the same short style as ours (one item per line for lists). Leave out changes that are only wording.
+- Only change what the provider's website clearly supports. If something is unclear, or the provider shows no prices, change nothing for it and say so in the summary.
+- If you could not find the service on the provider's website, set found to false, explain in the summary, and make no changes.
+- page_text: the useful facts you read on the provider's website.
+
+Step 2 — compare the CORRECTED information (ours after your step-1 changes) with our own public website page below, and list what has to be fixed on our website.
+
+${ourPage}
+
+${COMPARE_RULES}`;
 
   const resp = await run({
     max_tokens: 32000,
-    output_config: { effort: 'high', format: { type: 'json_schema', schema: CHECK_SCHEMA } },
-    tools,
+    output_config: { effort: 'high', format: { type: 'json_schema', schema: CHECK_WITH_SITE_SCHEMA } },
+    tools: [{ type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 8, allowed_domains: [...new Set([host, bare])] }],
     messages: [{ role: 'user', content: prompt }]
-  }, `website check service ${service.id}`);
-
+  }, `provider check service ${service.id}`);
   const data = parseJson(finalText(resp));
   if (!data) throw new AiError('Could not read Claude’s answer for this website. Try again.', 502);
-  return data;
+  return { mode: 'provider', ...data };
 }
 
-// Turn a check result into the list of proposals shown on the service page.
 // Which of our options a website option most likely is, by the words in
 // their names ("Aqua Champagne Brunch Cruise" -> our "Brunch Tour").
 const NAME_NOISE = new Set(['tour', 'tours', 'cruise', 'cruises', 'trip', 'the', 'a', 'an', 'and', 'with', 'of',
@@ -442,10 +543,14 @@ const NAME_NOISE = new Set(['tour', 'tours', 'cruise', 'cruises', 'trip', 'the',
 const NAME_SAME = { single: '1', one: '1', double: '2', two: '2', triple: '3', three: '3', four: '4', five: '5', six: '6' };
 const nameWords = (n) => new Set(String(n || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ')
   .map((w) => NAME_SAME[w] || w).filter((w) => w && !NAME_NOISE.has(w)));
+const VARIANT_WORDS = new Set(['vip', 'deluxe', 'premium', 'luxury', 'dinner', 'combo', 'extended', 'upgrade',
+  'family', 'group', 'kids', 'exclusive', 'plus']);
 export function bestOptionMatches(newNames, options, taken = new Set()) {
   const pairs = [];
   newNames.forEach((name, i) => {
     const a = nameWords(name);
+    // a variant of a tour is its own product, never the same as the plain one
+    if ([...a].some((w) => VARIANT_WORDS.has(w))) return;
     for (const o of options) {
       if (taken.has(o.id)) continue;
       const b = nameWords(o.option_name);
@@ -480,6 +585,7 @@ export function asUpdateOf(cur, option) {
 const oldOf = (cur) => ({ option_name: cur.option_name, price: cur.price, child_price: cur.child_price || 0,
   price_unit: cur.price_unit, timing: cur.timing || '', notes: cur.notes || '' });
 
+// Turn a provider check into the list of changes to apply to the service.
 export function proposalsFrom(service, data) {
   const out = [];
   const id = () => crypto.randomBytes(5).toString('hex');

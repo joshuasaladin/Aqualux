@@ -715,7 +715,17 @@ function getServiceFull(id) {
   if (!svc) return null;
   svc.options = db.prepare(`
     SELECT * FROM service_options WHERE service_id = ? ORDER BY sort_order, id`).all(id);
-  svc.suggestions = parseSuggestions(svc.suggestions);
+  withLists(svc);
+  return svc;
+}
+
+// JSON list columns -> arrays for the browser (the undo snapshot stays here)
+function withLists(svc) {
+  svc.last_changes = parseSuggestions(svc.last_changes);
+  svc.site_issues = parseSuggestions(svc.site_issues);
+  svc.can_undo = !!svc.undo_snapshot;
+  delete svc.undo_snapshot;
+  delete svc.suggestions;
   return svc;
 }
 
@@ -790,7 +800,7 @@ app.get('/api/services', (req, res) => {
   }
   for (const s of services) {
     s.options = byService.get(s.id) || [];
-    s.suggestions = parseSuggestions(s.suggestions);
+    withLists(s);
   }
   res.json(services);
 });
@@ -847,18 +857,55 @@ app.post('/api/services/import-website', (req, res) => {
   res.json(importWebsiteCatalog());
 });
 
-// Read the provider's website with Claude and store proposed changes.
+// Check one service, in order of priority:
+//   1. the provider's website (when linked): its prices and info are applied
+//      to the service straight away — with an undo
+//   2. otherwise the info entered in the CRM stays as it is
+// then compare the result with our live page on aqualuxaruba.com and keep a
+// list of what to fix there.
+const SNAPSHOT_FIELDS = ['summary', 'included', 'duration', 'location', 'good_to_know',
+  'cancellation_policy', 'company', 'contact', 'website_url'];
+
+function describeChange(p) {
+  const fmt = (o) => o ? `${o.price_unit === 'quote' && !o.price ? 'price on request' : `$${Number(o.price || 0).toLocaleString('en-US')}`}${o.child_price ? ` (child $${o.child_price})` : ''}${o.timing ? ` · ${o.timing}` : ''}` : '';
+  if (p.kind === 'field') return { label: p.label, old: p.old_value || '', new: p.new_value, reason: p.reason || '' };
+  if (p.action === 'add') return { label: `New price option: ${p.option.option_name}`, old: '', new: fmt(p.option), reason: p.reason || '' };
+  return { label: `Price: ${p.label}`, old: fmt(p.old), new: fmt(p.option), reason: p.reason || '' };
+}
+
 app.post('/api/services/:id/check', async (req, res) => {
   const svc = getServiceFull(req.params.id);
   if (!svc) return res.status(404).json({ error: 'Not found' });
   try {
-    const data = await ai.checkWebsite(svc);
-    const proposals = ai.proposalsFrom(svc, data);
-    db.prepare(`
-      UPDATE services SET provider_text = ?, check_summary = ?, suggestions = ?,
-        checked_at = datetime('now') WHERE id = ?`)
-      .run(String(data.page_text || svc.provider_text || '').slice(0, 8000),
-        String(data.summary || '').slice(0, 2000), JSON.stringify(proposals), svc.id);
+    // our own page, live — so a fix made on the website shows up right away
+    let ourText = db.prepare(`SELECT website_text FROM services WHERE id = ?`).get(svc.id).website_text || '';
+    if (svc.page_url) {
+      try {
+        ourText = await ai.fetchOurPage(svc.page_url);
+        db.prepare(`UPDATE services SET website_text = ? WHERE id = ?`).run(ourText, svc.id);
+      } catch (err) {
+        console.warn(`[check] could not read ${svc.page_url}: ${err.message} — using the saved copy`);
+      }
+    }
+    const data = await ai.checkService(svc, ourText);
+
+    if (data.mode === 'provider') {
+      const changes = ai.proposalsFrom(svc, data);
+      if (changes.length) {
+        const snapshot = { fields: Object.fromEntries(SNAPSHOT_FIELDS.map((f) => [f, svc[f] ?? ''])), options: svc.options };
+        for (const p of changes) applyProposal(svc, p);
+        db.prepare(`UPDATE services SET last_changes = ?, undo_snapshot = ? WHERE id = ?`)
+          .run(JSON.stringify(changes.map(describeChange)), JSON.stringify(snapshot), svc.id);
+      } else {
+        db.prepare(`UPDATE services SET last_changes = '[]', undo_snapshot = '' WHERE id = ?`).run(svc.id);
+      }
+      db.prepare(`UPDATE services SET provider_text = ?, checked_at = datetime('now') WHERE id = ?`)
+        .run(String(data.page_text || svc.provider_text || '').slice(0, 8000), svc.id);
+    }
+    const issues = (data.site_issues || []).filter((i) => i && i.topic)
+      .map((i) => ({ id: crypto.randomBytes(5).toString('hex'), topic: String(i.topic), website_says: String(i.website_says || ''), should_say: String(i.should_say || '') }));
+    db.prepare(`UPDATE services SET site_issues = ?, check_summary = ?, site_checked_at = datetime('now') WHERE id = ?`)
+      .run(JSON.stringify(issues), String(data.summary || '').slice(0, 2000), svc.id);
     res.json(getServiceFull(svc.id));
   } catch (err) {
     const e = ai.friendlyError(err);
@@ -892,24 +939,41 @@ function applyProposal(svc, p) {
   }
 }
 
-// Accept one proposal (or "all"), or dismiss one.
-app.post('/api/services/:id/suggestions/:sid/:action', (req, res) => {
+// Put the service back the way it was before the last provider check.
+app.post('/api/services/:id/undo', (req, res) => {
+  const row = db.prepare(`SELECT undo_snapshot FROM services WHERE id = ?`).get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'Not found' });
+  let snap;
+  try { snap = JSON.parse(row.undo_snapshot || 'null'); } catch { snap = null; }
+  if (!snap) return res.status(400).json({ error: 'There is nothing to undo.' });
+  const fields = SNAPSHOT_FIELDS.filter((f) => f in snap.fields);
+  db.prepare(`UPDATE services SET ${fields.map((f) => `${f} = ?`).join(', ')}, last_changes = '[]',
+    undo_snapshot = '', updated_at = datetime('now') WHERE id = ?`)
+    .run(...fields.map((f) => String(snap.fields[f] ?? '')), req.params.id);
+  db.prepare(`DELETE FROM service_options WHERE service_id = ?`).run(req.params.id);
+  const ins = db.prepare(`
+    INSERT INTO service_options (id, service_id, option_name, price, price_unit, child_price, min_people, max_people,
+      downpayment_percent, downpayment_fixed, downpayment_per_person, timing, notes, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  for (const o of snap.options || []) {
+    ins.run(o.id, req.params.id, o.option_name, o.price, o.price_unit, o.child_price, o.min_people, o.max_people,
+      o.downpayment_percent, o.downpayment_fixed, o.downpayment_per_person, o.timing, o.notes, o.sort_order);
+  }
+  res.json(getServiceFull(req.params.id));
+});
+
+// Hide the list of what the last check changed (the changes themselves stay).
+app.post('/api/services/:id/changes/clear', (req, res) => {
+  db.prepare(`UPDATE services SET last_changes = '[]', undo_snapshot = '' WHERE id = ?`).run(req.params.id);
+  res.json(getServiceFull(req.params.id));
+});
+
+// A website fix is done (or not needed): take it off the list.
+app.post('/api/services/:id/site-issues/:iid/done', (req, res) => {
   const svc = getServiceFull(req.params.id);
   if (!svc) return res.status(404).json({ error: 'Not found' });
-  const { sid, action } = req.params;
-  if (!['accept', 'dismiss'].includes(action)) return res.status(400).json({ error: 'Unknown action' });
-  const pick = (p) => sid === 'all' || p.id === sid;
-  if (action === 'accept') {
-    for (let p of svc.suggestions.filter(pick)) {
-      // a "new" option the user chose to apply to one of their existing options
-      const target = Number(sid === 'all' ? req.body?.targets?.[p.id] : req.body?.target_option_id);
-      const cur = target && p.kind === 'option' && p.action === 'add' && svc.options.find((o) => o.id === target);
-      if (cur) p = { ...p, action: 'update', option_id: cur.id, option: ai.asUpdateOf(cur, p.option) };
-      applyProposal(svc, p);
-    }
-  }
-  const left = svc.suggestions.filter((p) => !pick(p));
-  db.prepare(`UPDATE services SET suggestions = ? WHERE id = ?`).run(JSON.stringify(left), svc.id);
+  const left = svc.site_issues.filter((i) => req.params.iid !== 'all' && i.id !== req.params.iid);
+  db.prepare(`UPDATE services SET site_issues = ? WHERE id = ?`).run(JSON.stringify(left), svc.id);
   res.json(getServiceFull(svc.id));
 });
 

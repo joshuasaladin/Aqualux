@@ -876,7 +876,7 @@ function fromPrice(options) {
 }
 
 function serviceTile(s) {
-  const n = s.suggestions?.length || 0;
+  const n = s.site_issues?.length || 0;
   // the icon shows when there's no photo, or the photo can't load
   const img = `<span class="svc-tile-ph">${catIcon(s.category)}</span>` + (s.image_url
     ? `<img src="${esc(sizedImage(s.image_url, 640, 420))}" alt="" loading="lazy" onerror="this.remove()">` : '');
@@ -884,7 +884,7 @@ function serviceTile(s) {
   <button class="svc-tile" data-svc="${s.id}">
     <div class="svc-tile-img">${img}
       ${s.category ? `<span class="svc-tile-cat">${esc(s.category)}</span>` : ''}
-      ${n ? `<span class="svc-tile-flag">✨ ${n} update${n === 1 ? '' : 's'} to review</span>` : ''}
+      ${n ? `<span class="svc-tile-flag">⚠ ${n} to fix on website</span>` : ''}
     </div>
     <div class="svc-tile-body">
       <div class="svc-tile-title">${esc(s.service_name)}</div>
@@ -902,12 +902,17 @@ function serviceTile(s) {
 function renderServiceGrid() {
   const q = $('#service-search').value.trim().toLowerCase();
   const cats = [...new Set(allServices.map((s) => s.category).filter(Boolean))].sort();
-  if (serviceCat && !cats.includes(serviceCat)) serviceCat = '';
+  if (serviceCat && serviceCat !== FIX_CAT && !cats.includes(serviceCat)) serviceCat = '';
+  const toFix = allServices.filter((s) => s.site_issues?.length);
+  if (serviceCat === FIX_CAT && !toFix.length) serviceCat = '';
   $('#svc-cats').innerHTML = ['', ...cats].map((c) => `
     <button class="chip ${c === serviceCat ? 'active' : ''}" data-cat="${esc(c)}">
       ${c ? `${catIcon(c)} ${esc(c)}` : 'All'}
       <span class="chip-count">${c ? allServices.filter((s) => s.category === c).length : allServices.length}</span>
-    </button>`).join('');
+    </button>`).join('') + (toFix.length ? `
+    <button class="chip chip-fix ${serviceCat === FIX_CAT ? 'active' : ''}" data-cat="${FIX_CAT}">
+      ⚠ Fix on website <span class="chip-count">${toFix.length}</span>
+    </button>` : '');
   $('#svc-cats').querySelectorAll('[data-cat]').forEach((b) => b.addEventListener('click', () => {
     serviceCat = b.dataset.cat;
     try { localStorage.setItem('aqualux_svc_cat', serviceCat); } catch { /* private mode */ }
@@ -915,12 +920,13 @@ function renderServiceGrid() {
   }));
   $('#category-list').innerHTML = cats.map((c) => `<option value="${esc(c)}">`).join('');
 
-  const list = allServices.filter((s) => (!serviceCat || s.category === serviceCat) &&
+  const list = allServices.filter((s) => (!serviceCat || s.category === serviceCat ||
+      (serviceCat === FIX_CAT && s.site_issues?.length)) &&
     (!q || [s.service_name, s.company, s.category, s.wix_form_name, s.summary]
       .some((v) => String(v || '').toLowerCase().includes(q))));
-  const pending = allServices.reduce((a, s) => a + (s.suggestions?.length || 0), 0);
+  const pending = allServices.reduce((a, s) => a + (s.site_issues?.length || 0), 0);
   $('#svc-review-note').innerHTML = pending
-    ? `✨ The website check found <b>${pending}</b> update${pending === 1 ? '' : 's'} to review — open a service marked ✨ to accept or dismiss them.`
+    ? `⚠ <b>${pending}</b> thing${pending === 1 ? '' : 's'} on aqualuxaruba.com ${pending === 1 ? 'doesn’t' : 'don’t'} match the correct info — open a service marked ⚠ to see what to change on the website.`
     : '';
   $('#svc-review-note').classList.toggle('hidden', !pending);
   $('#service-grid').innerHTML = list.length ? list.map(serviceTile).join('') : `
@@ -928,6 +934,8 @@ function renderServiceGrid() {
   $('#service-grid').querySelectorAll('[data-svc]').forEach((b) =>
     b.addEventListener('click', () => openService(Number(b.dataset.svc))));
 }
+
+const FIX_CAT = '__fix';
 
 async function loadServices() {
   serviceBookPromise = null; // the booking suggestions re-read any edits made here
@@ -956,27 +964,26 @@ $('#btn-import-site').addEventListener('click', async (e) => {
   }
 });
 
-// Check every service that has a provider website, one after another.
+// Check every service, one after another.
 let checkingAll = false;
 $('#btn-check-all').addEventListener('click', async () => {
   if (checkingAll) return;
-  const targets = allServices.filter((s) => s.website_url);
-  if (!targets.length) {
-    toast('Add the provider’s website link on a service first — open a service and paste it under “Provider website”.');
-    return;
-  }
-  if (!confirm(`Check ${targets.length} provider website${targets.length === 1 ? '' : 's'} for price and info changes?\n\nThis takes about a minute per website and costs roughly 10–30¢ each in Claude usage. Nothing changes until you accept the updates.`)) return;
+  const targets = allServices;
+  const linked = targets.filter((s) => s.website_url).length;
+  if (!targets.length) return;
+  if (!confirm(`Check all ${targets.length} services?\n\n• ${linked} with a provider website: their prices and info are updated from it (each has an Undo).\n• All of them: compared with aqualuxaruba.com, so you know what to fix there.\n\nThis takes a few minutes and costs roughly ${linked ? `10–30¢ per provider website and ` : ''}2–5¢ per service in Claude usage.`)) return;
   checkingAll = true;
   const bar = $('#svc-progress');
   bar.classList.remove('hidden');
-  let found = 0, failed = 0;
+  let found = 0, changed = 0, failed = 0;
   for (let i = 0; i < targets.length; i++) {
     const s = targets[i];
     bar.innerHTML = `<span class="ai-spinner"></span> Checking ${i + 1} of ${targets.length}: <b>${esc(s.service_name)}</b>…
       <span class="svc-progress-track"><span style="width:${Math.round((i / targets.length) * 100)}%"></span></span>`;
     try {
       const updated = await api(`/services/${s.id}/check`, { method: 'POST' });
-      found += updated.suggestions?.length || 0;
+      found += updated.site_issues?.length || 0;
+      changed += updated.last_changes?.length || 0;
       const idx = allServices.findIndex((x) => x.id === s.id);
       if (idx >= 0) allServices[idx] = updated;
       renderServiceGrid();
@@ -987,7 +994,7 @@ $('#btn-check-all').addEventListener('click', async () => {
   }
   checkingAll = false;
   bar.classList.add('hidden');
-  toast(`Website check done: ${found} update${found === 1 ? '' : 's'} to review${failed ? `, ${failed} website${failed === 1 ? '' : 's'} could not be checked` : ''}.`);
+  toast(`Check done: ${changed} update${changed === 1 ? '' : 's'} from provider websites, ${found} thing${found === 1 ? '' : 's'} to fix on aqualuxaruba.com${failed ? `, ${failed} service${failed === 1 ? '' : 's'} could not be checked` : ''}.`);
 });
 
 $('#btn-add-service').addEventListener('click', () => {
@@ -1072,64 +1079,28 @@ function optionEditRow(o = {}) {
   </div>`;
 }
 
-// Which of our price options a website option most likely is, by the words
-// in their names ("Aqua Champagne Brunch Cruise" -> our "Brunch Tour").
-const NAME_NOISE = new Set(['tour', 'tours', 'cruise', 'cruises', 'trip', 'the', 'a', 'an', 'and', 'with', 'of',
-  'for', 'sailing', 'snorkeling', 'snorkel', 'experience', 'package', 'option', 'minutes', 'minute', 'min',
-  'mins', 'hours', 'hour', 'massage', 'private', 'charter', 'per', 'person']);
-const NAME_SAME = { single: '1', one: '1', double: '2', two: '2', triple: '3', three: '3', four: '4', five: '5', six: '6' };
-const nameWords = (n) => new Set(String(n || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ')
-  .map((w) => NAME_SAME[w] || w).filter((w) => w && !NAME_NOISE.has(w)));
-function guessTargets(suggestions, options) {
-  const adds = suggestions.filter((p) => p.kind === 'option' && p.action === 'add');
-  const used = new Set(suggestions.filter((p) => p.action === 'update').map((p) => p.option_id));
-  const pairs = [];
-  for (const p of adds) {
-    const a = nameWords(p.option?.option_name);
-    for (const o of options) {
-      const b = nameWords(o.option_name);
-      const overlap = [...a].filter((w) => b.has(w)).length;
-      if (!overlap || overlap / Math.min(a.size, b.size) < 0.5) continue;
-      pairs.push({ pid: p.id, id: o.id, contain: overlap / Math.min(a.size, b.size), jac: overlap / new Set([...a, ...b]).size });
-    }
-  }
-  pairs.sort((x, y) => y.contain - x.contain || y.jac - x.jac);
-  const out = {};
-  for (const q of pairs) {
-    if (out[q.pid] || used.has(q.id)) continue;
-    out[q.pid] = q.id;
-    used.add(q.id);
-  }
-  return out;
+function changeHtml(c) {
+  return `
+  <div class="prop">
+    <div class="prop-main">
+      <div class="prop-title">${esc(c.label)}</div>
+      ${c.old ? `<div class="prop-old">${textToHtml(c.old)}</div>` : ''}
+      <div class="prop-new">${textToHtml(c.new)}</div>
+      ${c.reason ? `<div class="prop-why">${esc(c.reason)}</div>` : ''}
+    </div>
+  </div>`;
 }
 
-function proposalHtml(p, options = [], guess = {}) {
-  const fmtOpt = (o) => o ? `${o.option_name ? `<b>${esc(o.option_name)}</b> · ` : ''}${o.price_unit === 'quote' && !o.price ? 'quote' : `${money(o.price)} ${PRICE_UNIT_LABELS[o.price_unit] || ''}`}${o.child_price ? ` · child ${money(o.child_price)}` : ''}${o.timing ? ` · ${esc(o.timing)}` : ''}${o.notes ? ` · ${esc(o.notes)}` : ''}` : '';
-  let what;
-  if (p.kind === 'field') {
-    what = `
-      <div class="prop-title">${esc(p.label)}</div>
-      ${p.old_value ? `<div class="prop-old">${textToHtml(p.old_value)}</div>` : '<div class="prop-old prop-empty">Empty now</div>'}
-      <div class="prop-new">${textToHtml(p.new_value)}</div>`;
-  } else {
-    what = `
-      <div class="prop-title">${p.action === 'add' ? 'New price option' : `Price: ${esc(p.label)}`}</div>
-      ${p.action === 'update' ? `<div class="prop-old">${fmtOpt(p.old)}</div>` : ''}
-      <div class="prop-new">${fmtOpt(p.option)}</div>
-      ${p.action === 'add' && options.length ? `
-      <label class="prop-target">Use this price to
-        <select data-target="${esc(p.id)}">
-          <option value="">add it as a new option</option>
-          ${options.map((o) => `<option value="${o.id}" ${guess[p.id] === o.id ? 'selected' : ''}>update “${esc(o.option_name || 'Option')}” (now ${money(o.price)}${o.child_price ? ` / child ${money(o.child_price)}` : ''})</option>`).join('')}
-        </select>
-      </label>` : ''}`;
-  }
+function issueHtml(i) {
   return `
-  <div class="prop" data-prop="${esc(p.id)}">
-    <div class="prop-main">${what}${p.reason ? `<div class="prop-why">${esc(p.reason)}</div>` : ''}</div>
+  <div class="prop">
+    <div class="prop-main">
+      <div class="prop-title">${esc(i.topic)}</div>
+      <div class="issue-line"><span>Website says</span><div class="prop-old">${textToHtml(i.website_says || 'Not on the website')}</div></div>
+      <div class="issue-line"><span>Should say</span><div class="prop-new">${textToHtml(i.should_say)}</div></div>
+    </div>
     <div class="prop-actions">
-      <button class="btn btn-sm btn-primary" data-accept="${esc(p.id)}">Accept</button>
-      <button class="btn btn-sm" data-dismiss="${esc(p.id)}">Dismiss</button>
+      <button class="btn btn-sm" data-issue-done="${esc(i.id)}" title="I changed it on the website (or it doesn't need changing)">✓ Done</button>
     </div>
   </div>`;
 }
@@ -1175,20 +1146,25 @@ async function openService(id) {
   </div>
 
   <div class="svc-page">
-    <div id="svc-props"></div>
-
     <div class="panel svc-web-panel">
-      <h3>Provider website</h3>
-      <p class="reply-hint">The company’s own website for this service. The AI reads it to keep prices and details here up to date — you approve every change.</p>
-      <div class="svc-web-row">
-        <input class="sf" data-f="website_url" type="url" inputmode="url" autocomplete="off" spellcheck="false"
-               placeholder="https://" value="${esc(s.website_url || '')}">
-        <button class="btn btn-ai" id="svc-check">✨ <span>${s.website_url ? 'Check website for updates' : 'Find website & check'}</span></button>
+      <h3>Where this page’s info comes from</h3>
+      <ol class="source-order">
+        <li><b>The provider’s website</b> — when it’s linked below, its prices and info are copied onto this page every time you check.</li>
+        <li><b>What you type here</b> — used when there’s no provider website.</li>
+        <li><b>aqualuxaruba.com</b> — compared with the above; anything different shows up as <i>Fix on aqualuxaruba.com</i>.</li>
+      </ol>
+      <div class="sf-label" style="margin:12px 0 0">Provider website
+        <div class="svc-web-row">
+          <input class="sf" data-f="website_url" type="url" inputmode="url" autocomplete="off" spellcheck="false"
+                 placeholder="https://" value="${esc(s.website_url || '')}">
+          <button class="btn btn-ai" id="svc-check">✨ <span id="svc-check-label"></span></button>
+        </div>
       </div>
-      <div class="svc-check-info" id="svc-check-info">${s.checked_at
-        ? `Last checked ${fmtChecked(s.checked_at)}${s.check_summary ? ` — ${esc(s.check_summary)}` : ''}`
-        : 'Not checked yet.'}</div>
+      <div class="svc-check-info" id="svc-check-info"></div>
     </div>
+
+    <div id="svc-changes"></div>
+    <div id="svc-issues"></div>
 
     <div class="svc-cols">
       <div class="panel">
@@ -1311,58 +1287,79 @@ async function openService(id) {
     optRows.lastElementChild.querySelector('.opt-name').focus();
   });
 
-  // --- proposals from the website check ---
-  function renderProps() {
-    const list = s.suggestions || [];
-    const guess = guessTargets(list, s.options);
-    $('#svc-props').innerHTML = list.length ? `
-      <div class="panel props-panel">
+  // --- the check: provider first, then compare with aqualuxaruba.com ---
+  const checkLabel = () => {
+    const linked = !!drawer.querySelector('.sf[data-f="website_url"]').value.trim();
+    $('#svc-check-label').textContent = linked ? 'Update from provider & compare' : 'Compare with aqualuxaruba.com';
+  };
+  checkLabel();
+  drawer.querySelector('.sf[data-f="website_url"]').addEventListener('input', checkLabel);
+  function renderCheckInfo() {
+    const when = s.site_checked_at || s.checked_at;
+    $('#svc-check-info').className = 'svc-check-info';
+    $('#svc-check-info').innerHTML = when
+      ? `Last checked ${fmtChecked(when)}${s.check_summary ? ` — ${esc(s.check_summary)}` : ''}`
+      : 'Not checked yet.';
+  }
+  renderCheckInfo();
+
+  function refreshForm(updated) {
+    for (const el of drawer.querySelectorAll('.sf')) {
+      if (document.activeElement !== el) { el.value = updated[el.dataset.f] ?? ''; if (el.classList.contains('auto-grow')) grow(el); }
+    }
+    optRows.innerHTML = updated.options.map((o) => optionEditRow(o)).join('');
+    if (updated.provider_text) {
+      $('#svc-provider-text').innerHTML = textToHtml(updated.provider_text);
+      $('#svc-provider-source').classList.remove('hidden');
+    }
+    checkLabel();
+  }
+
+  function renderResults() {
+    const changes = s.last_changes || [];
+    $('#svc-changes').innerHTML = changes.length ? `
+      <div class="panel props-panel changes-panel">
         <div class="props-head">
-          <h3>✨ Updates found on the provider’s website</h3>
-          ${list.length > 1 ? '<button class="btn btn-sm btn-primary" data-accept="all">Accept all</button>' : ''}
+          <h3>✨ Updated from the provider’s website</h3>
+          ${s.can_undo ? '<button class="btn btn-sm" id="svc-undo">↶ Undo these changes</button>' : ''}
+          <button class="btn btn-sm" id="svc-changes-ok">Got it</button>
         </div>
-        <p class="reply-hint">Nothing changes until you accept. Old value is crossed out, the new one is in green.</p>
-        ${list.map((p) => proposalHtml(p, s.options, guess)).join('')}
+        <p class="reply-hint">These are already saved on this page. The old value is crossed out.</p>
+        ${changes.map(changeHtml).join('')}
       </div>` : '';
-    // the target picker changes the wording of the Accept button
-    const syncAcceptLabel = (sel) => {
-      const btn = $('#svc-props').querySelector(`[data-accept="${CSS.escape(sel.dataset.target)}"]`);
-      if (btn) btn.textContent = sel.value ? 'Update price' : 'Add option';
-    };
-    $('#svc-props').querySelectorAll('[data-target]').forEach((sel) => {
-      syncAcceptLabel(sel);
-      sel.addEventListener('change', () => syncAcceptLabel(sel));
+    const issues = s.site_issues || [];
+    $('#svc-issues').innerHTML = issues.length ? `
+      <div class="panel issues-panel">
+        <div class="props-head">
+          <h3>⚠ Fix on aqualuxaruba.com</h3>
+          ${s.page_url ? `<a class="btn btn-sm" href="${esc(s.page_url)}" target="_blank" rel="noopener">Open our page ↗</a>` : ''}
+        </div>
+        <p class="reply-hint">Your website doesn’t match the correct info for this service. Change these on the website, then tap ✓ Done — or check again to confirm.</p>
+        ${issues.map(issueHtml).join('')}
+      </div>` : '';
+
+    $('#svc-undo')?.addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      try {
+        const updated = await api(`/services/${id}/undo`, { method: 'POST' });
+        applySaved(updated); refreshForm(updated); renderResults();
+        showSaved('Undone ✓', 'ok');
+      } catch (err) { toast(err.message, 'err'); e.target.disabled = false; }
     });
-    $('#svc-props').querySelectorAll('[data-accept], [data-dismiss]').forEach((b) => b.addEventListener('click', async () => {
-      await saveNow();
-      const accept = b.dataset.accept;
+    $('#svc-changes-ok')?.addEventListener('click', async () => {
+      const updated = await api(`/services/${id}/changes/clear`, { method: 'POST' });
+      applySaved(updated); renderResults();
+    });
+    $('#svc-issues').querySelectorAll('[data-issue-done]').forEach((b) => b.addEventListener('click', async () => {
       b.disabled = true;
       try {
-        // where each "new option" should go: a new row, or one of ours
-        const targets = {};
-        $('#svc-props').querySelectorAll('[data-target]').forEach((sel) => { if (sel.value) targets[sel.dataset.target] = Number(sel.value); });
-        const body = accept === 'all' ? { targets } : { target_option_id: targets[accept] || 0 };
-        const updated = await api(`/services/${id}/suggestions/${encodeURIComponent(accept || b.dataset.dismiss)}/${accept ? 'accept' : 'dismiss'}`,
-          { method: 'POST', body: JSON.stringify(body) });
-        applySaved(updated);
-        if (accept) {
-          // show the accepted values in the form
-          for (const el of drawer.querySelectorAll('.sf')) {
-            if (document.activeElement !== el) { el.value = updated[el.dataset.f] ?? ''; if (el.classList.contains('auto-grow')) grow(el); }
-          }
-          optRows.innerHTML = updated.options.map((o) => optionEditRow(o)).join('');
-          showSaved('Updated ✓', 'ok');
-        }
-        renderProps();
-      } catch (err) {
-        toast(err.message, 'err');
-        b.disabled = false;
-      }
+        const updated = await api(`/services/${id}/site-issues/${encodeURIComponent(b.dataset.issueDone)}/done`, { method: 'POST' });
+        applySaved(updated); renderResults();
+      } catch (err) { toast(err.message, 'err'); b.disabled = false; }
     }));
   }
-  renderProps();
+  renderResults();
 
-  // --- check the provider's website with Claude ---
   $('#svc-check').addEventListener('click', async () => {
     const btn = $('#svc-check');
     await saveNow();
@@ -1371,19 +1368,18 @@ async function openService(id) {
     btn.classList.add('working');
     const info = $('#svc-check-info');
     info.className = 'svc-check-info working';
-    info.innerHTML = `<span class="ai-spinner"></span> ${s.website_url ? 'Reading the provider’s website' : 'Looking for the provider’s website'} and comparing it with this page… this can take a minute.`;
+    info.innerHTML = `<span class="ai-spinner"></span> ${s.website_url
+      ? 'Reading the provider’s website, updating this page, then comparing with aqualuxaruba.com'
+      : 'Comparing this page with aqualuxaruba.com'}… this can take a minute.`;
     try {
       const updated = await api(`/services/${id}/check`, { method: 'POST' });
       applySaved(updated);
-      info.className = 'svc-check-info';
-      const n = updated.suggestions.length;
-      info.innerHTML = `Checked just now${updated.check_summary ? ` — ${esc(updated.check_summary)}` : ''}${n ? '' : ' <b>No changes needed.</b>'}`;
-      if (updated.provider_text) {
-        $('#svc-provider-text').innerHTML = textToHtml(updated.provider_text);
-        $('#svc-provider-source').classList.remove('hidden');
-      }
-      renderProps();
-      if (n) $('#svc-props').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      refreshForm(updated);
+      renderCheckInfo();
+      renderResults();
+      const target = updated.last_changes.length ? '#svc-changes' : updated.site_issues.length ? '#svc-issues' : null;
+      if (target) $(target).scrollIntoView({ behavior: 'smooth', block: 'start' });
+      else toast('All good — aqualuxaruba.com matches this service.');
     } catch (err) {
       info.className = 'svc-check-info err';
       info.innerHTML = esc(err.message) + (/API key/i.test(err.message) ? ' <a href="#" id="svc-goto-settings">Open Settings</a>' : '');
@@ -2319,7 +2315,7 @@ async function renderAiPanel() {
       </div>
     </div>
     <span class="send-status" id="ai-key-status"></span>
-    <p class="reply-hint" style="margin-top:10px">Used for <b>✨ Write with AI</b> in every lead and <b>✨ Check website</b> on the Services page.
+    <p class="reply-hint" style="margin-top:10px">Used for <b>✨ Write with AI</b> in every lead and the service checks on the Services page.
       A reply costs about 2–6¢, a website check about 10–30¢ (billed by Anthropic to the key’s account).</p>`
   : `
     <p class="reply-hint" style="margin-bottom:10px">Connect Claude to write replies for you and keep the Services pages up to date from the providers’ websites.</p>

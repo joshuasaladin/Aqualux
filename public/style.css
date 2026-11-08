@@ -775,6 +775,20 @@ main.wide { max-width: 1750px; }
 .prop-old.prop-empty { text-decoration: none; font-style: italic; }
 .prop-new { color: #0f6b43; background: #eaf7f0; border-radius: 8px; padding: 6px 9px; overflow-wrap: anywhere; }
 .prop-why { color: var(--muted); font-size: .8rem; margin-top: 5px; }
+.changes-panel .prop { border-top-color: #e3eef2; }
+.changes-panel { border-color: #cfe7ee; background: linear-gradient(180deg, #f7fcfd, #fff); }
+.changes-panel .props-head h3 { color: var(--aqua-dark); }
+.issues-panel { border-color: #f1d3a6; background: linear-gradient(180deg, #fffaf1, #fff); }
+.issues-panel .props-head h3 { color: #9a5b00; }
+.issues-panel .prop { border-top-color: #f5e6cc; }
+.issue-line { display: grid; grid-template-columns: 92px 1fr; gap: 8px; align-items: start; margin-top: 4px; }
+.issue-line > span { font-size: .74rem; font-weight: 650; color: var(--muted); padding-top: 6px; text-transform: uppercase; letter-spacing: .3px; }
+.issue-line .prop-old { margin: 0; padding: 6px 9px; background: #fbf1f0; border-radius: 8px; }
+.source-order { margin: 0 0 0 18px; padding: 0; font-size: .86rem; color: #3c4b59; line-height: 1.5; }
+.source-order li { margin-bottom: 3px; }
+.chip-fix { border-color: #f1d3a6; color: #9a5b00; background: #fffaf1; }
+.chip-fix.active { background: #b26b00; border-color: #b26b00; color: #fff; }
+.svc-web-row .sf { margin-top: 0; font-weight: 400; }
 .prop-target { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; font-size: .8rem; font-weight: 600; color: #4d5d6c; }
 .prop-target select { width: auto; max-width: 100%; flex: 1 1 220px; padding: 6px 9px; font-size: .84rem; border-color: #b8dbe4; background: #f7fcfd; }
 .prop-actions { display: flex; flex-direction: column; gap: 6px; flex: none; }
@@ -940,6 +954,8 @@ main.wide { max-width: 1750px; }
   .svc-web-row .btn { justify-content: center; padding: 10px; }
   .opt-row-line3 { grid-template-columns: 1fr 1fr; }
   .prop { flex-direction: column; gap: 8px; }
+  .issue-line { grid-template-columns: 1fr; gap: 2px; }
+  .issue-line > span { padding-top: 0; }
   .prop-actions { flex-direction: row; width: 100%; }
   .prop-actions .btn { flex: 1; }
   .ai-bar { flex-direction: column; align-items: stretch; }
