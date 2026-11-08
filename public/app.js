@@ -1072,7 +1072,37 @@ function optionEditRow(o = {}) {
   </div>`;
 }
 
-function proposalHtml(p) {
+// Which of our price options a website option most likely is, by the words
+// in their names ("Aqua Champagne Brunch Cruise" -> our "Brunch Tour").
+const NAME_NOISE = new Set(['tour', 'tours', 'cruise', 'cruises', 'trip', 'the', 'a', 'an', 'and', 'with', 'of',
+  'for', 'sailing', 'snorkeling', 'snorkel', 'experience', 'package', 'option', 'minutes', 'minute', 'min',
+  'mins', 'hours', 'hour', 'massage', 'private', 'charter', 'per', 'person']);
+const nameWords = (n) => new Set(String(n || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ')
+  .filter((w) => w && !NAME_NOISE.has(w)));
+function guessTargets(suggestions, options) {
+  const adds = suggestions.filter((p) => p.kind === 'option' && p.action === 'add');
+  const used = new Set(suggestions.filter((p) => p.action === 'update').map((p) => p.option_id));
+  const pairs = [];
+  for (const p of adds) {
+    const a = nameWords(p.option?.option_name);
+    for (const o of options) {
+      const b = nameWords(o.option_name);
+      const overlap = [...a].filter((w) => b.has(w)).length;
+      if (!overlap || overlap / Math.min(a.size, b.size) < 0.5) continue;
+      pairs.push({ pid: p.id, id: o.id, contain: overlap / Math.min(a.size, b.size), jac: overlap / new Set([...a, ...b]).size });
+    }
+  }
+  pairs.sort((x, y) => y.contain - x.contain || y.jac - x.jac);
+  const out = {};
+  for (const q of pairs) {
+    if (out[q.pid] || used.has(q.id)) continue;
+    out[q.pid] = q.id;
+    used.add(q.id);
+  }
+  return out;
+}
+
+function proposalHtml(p, options = [], guess = {}) {
   const fmtOpt = (o) => o ? `${o.option_name ? `<b>${esc(o.option_name)}</b> · ` : ''}${o.price_unit === 'quote' && !o.price ? 'quote' : `${money(o.price)} ${PRICE_UNIT_LABELS[o.price_unit] || ''}`}${o.child_price ? ` · child ${money(o.child_price)}` : ''}${o.timing ? ` · ${esc(o.timing)}` : ''}${o.notes ? ` · ${esc(o.notes)}` : ''}` : '';
   let what;
   if (p.kind === 'field') {
@@ -1084,7 +1114,14 @@ function proposalHtml(p) {
     what = `
       <div class="prop-title">${p.action === 'add' ? 'New price option' : `Price: ${esc(p.label)}`}</div>
       ${p.action === 'update' ? `<div class="prop-old">${fmtOpt(p.old)}</div>` : ''}
-      <div class="prop-new">${fmtOpt(p.option)}</div>`;
+      <div class="prop-new">${fmtOpt(p.option)}</div>
+      ${p.action === 'add' && options.length ? `
+      <label class="prop-target">Use this price to
+        <select data-target="${esc(p.id)}">
+          <option value="">add it as a new option</option>
+          ${options.map((o) => `<option value="${o.id}" ${guess[p.id] === o.id ? 'selected' : ''}>update “${esc(o.option_name || 'Option')}” (now ${money(o.price)}${o.child_price ? ` / child ${money(o.child_price)}` : ''})</option>`).join('')}
+        </select>
+      </label>` : ''}`;
   }
   return `
   <div class="prop" data-prop="${esc(p.id)}">
@@ -1276,6 +1313,7 @@ async function openService(id) {
   // --- proposals from the website check ---
   function renderProps() {
     const list = s.suggestions || [];
+    const guess = guessTargets(list, s.options);
     $('#svc-props').innerHTML = list.length ? `
       <div class="panel props-panel">
         <div class="props-head">
@@ -1283,14 +1321,28 @@ async function openService(id) {
           ${list.length > 1 ? '<button class="btn btn-sm btn-primary" data-accept="all">Accept all</button>' : ''}
         </div>
         <p class="reply-hint">Nothing changes until you accept. Old value is crossed out, the new one is in green.</p>
-        ${list.map(proposalHtml).join('')}
+        ${list.map((p) => proposalHtml(p, s.options, guess)).join('')}
       </div>` : '';
+    // the target picker changes the wording of the Accept button
+    const syncAcceptLabel = (sel) => {
+      const btn = $('#svc-props').querySelector(`[data-accept="${CSS.escape(sel.dataset.target)}"]`);
+      if (btn) btn.textContent = sel.value ? 'Update price' : 'Add option';
+    };
+    $('#svc-props').querySelectorAll('[data-target]').forEach((sel) => {
+      syncAcceptLabel(sel);
+      sel.addEventListener('change', () => syncAcceptLabel(sel));
+    });
     $('#svc-props').querySelectorAll('[data-accept], [data-dismiss]').forEach((b) => b.addEventListener('click', async () => {
       await saveNow();
       const accept = b.dataset.accept;
       b.disabled = true;
       try {
-        const updated = await api(`/services/${id}/suggestions/${encodeURIComponent(accept || b.dataset.dismiss)}/${accept ? 'accept' : 'dismiss'}`, { method: 'POST' });
+        // where each "new option" should go: a new row, or one of ours
+        const targets = {};
+        $('#svc-props').querySelectorAll('[data-target]').forEach((sel) => { if (sel.value) targets[sel.dataset.target] = Number(sel.value); });
+        const body = accept === 'all' ? { targets } : { target_option_id: targets[accept] || 0 };
+        const updated = await api(`/services/${id}/suggestions/${encodeURIComponent(accept || b.dataset.dismiss)}/${accept ? 'accept' : 'dismiss'}`,
+          { method: 'POST', body: JSON.stringify(body) });
         applySaved(updated);
         if (accept) {
           // show the accepted values in the form

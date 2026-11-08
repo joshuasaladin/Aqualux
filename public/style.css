@@ -775,6 +775,8 @@ main.wide { max-width: 1750px; }
 .prop-old.prop-empty { text-decoration: none; font-style: italic; }
 .prop-new { color: #0f6b43; background: #eaf7f0; border-radius: 8px; padding: 6px 9px; overflow-wrap: anywhere; }
 .prop-why { color: var(--muted); font-size: .8rem; margin-top: 5px; }
+.prop-target { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 8px; font-size: .8rem; font-weight: 600; color: #4d5d6c; }
+.prop-target select { width: auto; max-width: 100%; flex: 1 1 220px; padding: 6px 9px; font-size: .84rem; border-color: #b8dbe4; background: #f7fcfd; }
 .prop-actions { display: flex; flex-direction: column; gap: 6px; flex: none; }
 
 /* ============================================================ mobile === */

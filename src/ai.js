@@ -415,7 +415,7 @@ ${current}
 </current>
 
 Compare the provider's website with what we have and propose changes:
-- option_changes: when the website's price for an option differs from ours, propose an "update" with the option_id and the website's price (keep our option name unless the website clearly renamed it; keep our unit, timing and notes unless the website shows different ones). Propose "add" (option_id 0) for options the website offers that we don't have. Don't propose removing options.
+- option_changes: when the website's price for an option differs from ours, propose an "update" with the option_id and the website's price (keep our option name unless the website clearly renamed it; keep our unit, timing and notes unless the website shows different ones). The website often uses different names for the same thing (for example our "Brunch Tour" may be called "Aqua Champagne Brunch Cruise" there, or our "Sunset Tour" a "Sunset Cruise") — match them by what they are (time of day, duration, type) and propose an "update" of our option, never an "add". Propose "add" (option_id 0) only for options that really have no match in ours (for example a dinner package we don't list). Don't propose removing options.
 - field_changes: propose a new value for a field only when the website clearly shows different or missing information (for example new times, a new inclusion, a changed policy). Write the full new value for the field, in the same short style as ours (one item per line for lists). Leave out changes that are only wording.
 - Only propose what the website clearly supports. If something is unclear, or the website shows no prices, propose nothing for it and say so in the summary.
 - If you could not find the service on the website, set found to false, explain in the summary, and propose no changes.
@@ -434,6 +434,51 @@ Compare the provider's website with what we have and propose changes:
 }
 
 // Turn a check result into the list of proposals shown on the service page.
+// Which of our options a website option most likely is, by the words in
+// their names ("Aqua Champagne Brunch Cruise" -> our "Brunch Tour").
+const NAME_NOISE = new Set(['tour', 'tours', 'cruise', 'cruises', 'trip', 'the', 'a', 'an', 'and', 'with', 'of',
+  'for', 'sailing', 'snorkeling', 'snorkel', 'experience', 'package', 'option', 'minutes', 'minute', 'min',
+  'mins', 'hours', 'hour', 'massage', 'private', 'charter', 'per', 'person']);
+const nameWords = (n) => new Set(String(n || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ')
+  .filter((w) => w && !NAME_NOISE.has(w)));
+export function bestOptionMatches(newNames, options, taken = new Set()) {
+  const pairs = [];
+  newNames.forEach((name, i) => {
+    const a = nameWords(name);
+    for (const o of options) {
+      if (taken.has(o.id)) continue;
+      const b = nameWords(o.option_name);
+      const overlap = [...a].filter((w) => b.has(w)).length;
+      if (!overlap) continue;
+      const contain = overlap / Math.min(a.size, b.size);
+      if (contain < 0.5) continue;
+      pairs.push({ i, id: o.id, contain, jac: overlap / new Set([...a, ...b]).size });
+    }
+  });
+  pairs.sort((x, y) => y.contain - x.contain || y.jac - x.jac);
+  const out = new Map(); // index -> option id
+  const used = new Set(taken);
+  for (const p of pairs) {
+    if (out.has(p.i) || used.has(p.id)) continue;
+    out.set(p.i, p.id);
+    used.add(p.id);
+  }
+  return out;
+}
+
+// A website option applied to one of our existing options: the website's
+// price, our name; their times/notes only where ours are empty.
+export function asUpdateOf(cur, option) {
+  return {
+    option_name: cur.option_name, price: Number(option.price) || 0,
+    child_price: Number(option.child_price) || Number(cur.child_price) || 0,
+    price_unit: option.price_unit || cur.price_unit,
+    timing: cur.timing || option.timing || '', notes: cur.notes || option.notes || ''
+  };
+}
+const oldOf = (cur) => ({ option_name: cur.option_name, price: cur.price, child_price: cur.child_price || 0,
+  price_unit: cur.price_unit, timing: cur.timing || '', notes: cur.notes || '' });
+
 export function proposalsFrom(service, data) {
   const out = [];
   const id = () => crypto.randomBytes(5).toString('hex');
@@ -469,11 +514,28 @@ export function proposalsFrom(service, data) {
         (cur.timing || '') === option.timing && (cur.notes || '') === option.notes;
       if (same) continue;
       out.push({ id: id(), kind: 'option', action: 'update', option_id: cur.id, label: cur.option_name || 'Option',
-        old: { option_name: cur.option_name, price: cur.price, child_price: cur.child_price || 0, price_unit: cur.price_unit, timing: cur.timing || '', notes: cur.notes || '' },
-        option: { ...option, option_name: option.option_name || cur.option_name }, reason: String(c.reason || '') });
+        old: oldOf(cur), option: { ...option, option_name: option.option_name || cur.option_name }, reason: String(c.reason || '') });
     } else if (option.option_name) {
       out.push({ id: id(), kind: 'option', action: 'add', option_id: 0, label: option.option_name, option, reason: String(c.reason || '') });
     }
   }
+  // "New" options that are really one of ours under another name become
+  // price updates of that option.
+  const adds = out.filter((p) => p.kind === 'option' && p.action === 'add');
+  const taken = new Set(out.filter((p) => p.action === 'update').map((p) => p.option_id));
+  const matches = bestOptionMatches(adds.map((p) => p.option.option_name), opts, taken);
+  adds.forEach((p, i) => {
+    const cur = opts.find((o) => o.id === matches.get(i));
+    if (!cur) return;
+    const upd = asUpdateOf(cur, p.option);
+    if (Number(cur.price) === upd.price && Number(cur.child_price || 0) === upd.child_price && cur.price_unit === upd.price_unit) {
+      out.splice(out.indexOf(p), 1); // same price already — nothing to do
+      return;
+    }
+    Object.assign(p, {
+      action: 'update', option_id: cur.id, label: cur.option_name || 'Option', old: oldOf(cur), option: upd,
+      reason: `Website calls it “${p.option.option_name}”. ${p.reason}`.trim()
+    });
+  });
   return out;
 }

@@ -898,7 +898,15 @@ app.post('/api/services/:id/suggestions/:sid/:action', (req, res) => {
   const { sid, action } = req.params;
   if (!['accept', 'dismiss'].includes(action)) return res.status(400).json({ error: 'Unknown action' });
   const pick = (p) => sid === 'all' || p.id === sid;
-  if (action === 'accept') for (const p of svc.suggestions.filter(pick)) applyProposal(svc, p);
+  if (action === 'accept') {
+    for (let p of svc.suggestions.filter(pick)) {
+      // a "new" option the user chose to apply to one of their existing options
+      const target = Number(sid === 'all' ? req.body?.targets?.[p.id] : req.body?.target_option_id);
+      const cur = target && p.kind === 'option' && p.action === 'add' && svc.options.find((o) => o.id === target);
+      if (cur) p = { ...p, action: 'update', option_id: cur.id, option: ai.asUpdateOf(cur, p.option) };
+      applyProposal(svc, p);
+    }
+  }
   const left = svc.suggestions.filter((p) => !pick(p));
   db.prepare(`UPDATE services SET suggestions = ? WHERE id = ?`).run(JSON.stringify(left), svc.id);
   res.json(getServiceFull(svc.id));
