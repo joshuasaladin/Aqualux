@@ -1077,8 +1077,9 @@ function optionEditRow(o = {}) {
 const NAME_NOISE = new Set(['tour', 'tours', 'cruise', 'cruises', 'trip', 'the', 'a', 'an', 'and', 'with', 'of',
   'for', 'sailing', 'snorkeling', 'snorkel', 'experience', 'package', 'option', 'minutes', 'minute', 'min',
   'mins', 'hours', 'hour', 'massage', 'private', 'charter', 'per', 'person']);
+const NAME_SAME = { single: '1', one: '1', double: '2', two: '2', triple: '3', three: '3', four: '4', five: '5', six: '6' };
 const nameWords = (n) => new Set(String(n || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ')
-  .filter((w) => w && !NAME_NOISE.has(w)));
+  .map((w) => NAME_SAME[w] || w).filter((w) => w && !NAME_NOISE.has(w)));
 function guessTargets(suggestions, options) {
   const adds = suggestions.filter((p) => p.kind === 'option' && p.action === 'add');
   const used = new Set(suggestions.filter((p) => p.action === 'update').map((p) => p.option_id));

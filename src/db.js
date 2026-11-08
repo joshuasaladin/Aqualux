@@ -170,7 +170,12 @@ function hasColumn(table, col) {
 // (with an 'option_name' column) is still around, preserve its rows under
 // services_legacy instead of losing them, then rebuild the new tables.
 if (hasColumn('services', 'option_name')) {
+  // legacy_alter_table: rename ONLY this table. Without it SQLite also
+  // re-points service_options' foreign key at services_legacy, after which
+  // new price options can't be saved (see the repair below).
+  db.exec('PRAGMA legacy_alter_table = ON');
   db.exec(`ALTER TABLE services RENAME TO services_legacy`);
+  db.exec('PRAGMA legacy_alter_table = OFF');
   db.exec(`
     CREATE TABLE services (
       id                    INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -217,6 +222,48 @@ if (hasColumn('services', 'option_name')) {
     }
   }
   console.log(`Migrated ${legacyGroups.size} legacy service(s) to the new Services book format.`);
+}
+// Repair: databases that went through the rename above (before it set
+// legacy_alter_table) have service_options pointing at services_legacy, so
+// every new price option failed with "FOREIGN KEY constraint failed".
+// Rebuild the table pointing at services, keeping every option whose
+// service still exists.
+{
+  const optSql = db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'service_options'`).get()?.sql || '';
+  if (/services_legacy/i.test(optSql)) {
+    db.exec('PRAGMA foreign_keys = OFF');
+    db.exec(`
+      CREATE TABLE service_options_fixed (
+        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+        service_id            INTEGER NOT NULL REFERENCES services(id) ON DELETE CASCADE,
+        option_name           TEXT NOT NULL DEFAULT '',
+        price                 REAL DEFAULT 0,
+        price_unit            TEXT NOT NULL DEFAULT 'per_person'
+                               CHECK (price_unit IN ('flat_total','per_person','per_vehicle','per_hour','per_day','quote')),
+        child_price           REAL DEFAULT 0,
+        min_people            INTEGER,
+        max_people            INTEGER,
+        downpayment_percent   REAL DEFAULT 0,
+        downpayment_fixed     REAL DEFAULT 0,
+        downpayment_per_person INTEGER NOT NULL DEFAULT 0,
+        timing                TEXT DEFAULT '',
+        notes                 TEXT DEFAULT '',
+        sort_order            INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT INTO service_options_fixed (id, service_id, option_name, price, price_unit, child_price,
+        min_people, max_people, downpayment_percent, downpayment_fixed, downpayment_per_person,
+        timing, notes, sort_order)
+      SELECT id, service_id, option_name, price, price_unit, child_price,
+        min_people, max_people, downpayment_percent, downpayment_fixed, downpayment_per_person,
+        timing, notes, sort_order
+      FROM service_options WHERE service_id IN (SELECT id FROM services);
+      DROP TABLE service_options;
+      ALTER TABLE service_options_fixed RENAME TO service_options;
+      CREATE INDEX IF NOT EXISTS idx_options_service ON service_options(service_id);
+    `);
+    db.exec('PRAGMA foreign_keys = ON');
+    console.log('Repaired the price options table (it pointed at the old services table).');
+  }
 }
 ensureColumn('leads', 'party_size', 'party_size INTEGER');
 ensureColumn('leads', 'source', `source TEXT NOT NULL DEFAULT 'email'`);

@@ -1240,6 +1240,14 @@ if (!getSetting('website_import_v1', false)) {
   }
 }
 
+// Any unexpected server error comes back as a readable message instead of
+// a bare "Request failed".
+app.use((err, req, res, next) => {
+  console.error(`[${req.method} ${req.path}]`, err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: `Server error: ${err.message || err}` });
+});
+
 gmail.startPolling();
 
 app.listen(PORT, () => {
