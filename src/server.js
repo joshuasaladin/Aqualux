@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { db, dataDir, touchLead, upsertClient, setSetting, getSetting, markThreadProcessed, LEAD_ORDER } from './db.js';
 import * as gmail from './gmail.js';
-import { SERVICE_CATALOG } from './services-catalog.js';
 import { WEBSITE_CATALOG } from './website-catalog.js';
 import * as ai from './ai.js';
 
@@ -827,8 +826,7 @@ app.patch('/api/services/:id', (req, res) => {
   res.json({ ...getServiceFull(req.params.id), new_option_ids: newIds });
 });
 
-// Services someone deleted on purpose: the spreadsheet and website imports
-// never bring these back.
+// Services someone deleted on purpose: the website import never brings them back.
 const deletedServiceNames = () => new Set((getSetting('deleted_services', []) || []).map((n) => String(n).toLowerCase()));
 function rememberDeleted(name) {
   const list = getSetting('deleted_services', []) || [];
@@ -840,13 +838,6 @@ app.delete('/api/services/:id', (req, res) => {
   if (svc) rememberDeleted(svc.service_name);
   db.prepare(`DELETE FROM services WHERE id = ?`).run(req.params.id);
   res.json({ ok: true });
-});
-
-// Re-run the bundled catalog import. Only inserts anything if the Services
-// book is currently empty — safe to call anytime, including as a manual
-// retry if an earlier import was interrupted (e.g. by a server restart).
-app.post('/api/services/reimport', (req, res) => {
-  res.json(seedServiceCatalog());
 });
 
 // Fill the info pages from www.aqualuxaruba.com (only empty fields; prices
@@ -1073,142 +1064,108 @@ if (process.env.DEMO === '1') {
 // re-run — it picks up exactly where it left off instead of needing a
 // clean slate. Never overwrites a service you've since edited by hand.
 //
-// Deliberately does NOT wrap the import in an explicit SQL transaction:
-// Node's built-in node:sqlite is still an experimental module, and on at
-// least one deployment target an explicit BEGIN caused every very-first
-// insert after it to fail with "FOREIGN KEY constraint failed" even though
-// the parent row had just been created successfully in the line above.
-// Per-entry existence checks give the same effective safety without
-// depending on that transaction behavior.
-function seedServiceCatalog() {
-  if (!SERVICE_CATALOG.length) return { skipped: true, reason: 'no catalog bundled' };
+// ------------------------------------------- services from our website --
+// www.aqualuxaruba.com is the only source of the Services pages (see
+// website-catalog.js). Our own internal fields — commission, contact,
+// booking method, what we need from the guest, internal notes, the
+// provider's website link — are never touched by any of this.
+const WEBSITE_INFO_FIELDS = ['summary', 'included', 'duration', 'location', 'good_to_know',
+  'cancellation_policy', 'website_prices', 'page_url', 'image_url', 'website_text'];
 
-  // Defensive cleanup: drop any service_options rows left orphaned by an
-  // earlier interrupted run (parent service_id no longer exists). These
-  // sit invisibly in the table — the Services view only ever shows options
-  // joined to a real service — but FK enforcement can still see them.
-  const orphans = db.prepare(`
-    DELETE FROM service_options WHERE service_id NOT IN (SELECT id FROM services)`).run();
-  if (orphans.changes) console.log(`[services seed] cleared ${orphans.changes} orphaned option row(s) before import`);
+// The CRM services that are this website service: by Wix form name, the
+// website's name, or an older name.
+function servicesFor(w) {
+  const names = [w.service_name, ...(w.aliases || [])].map((n) => n.toLowerCase());
+  return db.prepare(`SELECT * FROM services ORDER BY id`).all().filter((s) =>
+    (w.match || []).includes(s.wix_form_name) || names.includes(String(s.service_name).toLowerCase()));
+}
 
-  const findExisting = db.prepare(`
-    SELECT id FROM services WHERE category = ? AND service_name = ? AND wix_form_name = ?`);
-  const insSvc = db.prepare(`
-    INSERT INTO services (category, wix_form_name, service_name, company, contact,
-      booking_method, info_needed, internal_notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-  const insOpt = db.prepare(`
+function insertOptions(serviceId, options) {
+  const ins = db.prepare(`
     INSERT INTO service_options (service_id, option_name, price, price_unit, child_price,
-      min_people, max_people, downpayment_percent, downpayment_fixed, downpayment_per_person,
-      timing, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      min_people, max_people, timing, notes, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  (options || []).forEach((o, i) => ins.run(serviceId, o.option_name, o.price || 0, o.price_unit || 'per_person',
+    o.child_price || 0, o.min_people ?? null, o.max_people ?? null, o.timing || '', o.notes || '', i));
+}
 
-  const existingOptionNames = db.prepare(`
-    SELECT option_name FROM service_options WHERE service_id = ?`);
+function createFromWebsite(w) {
+  const info = db.prepare(`
+    INSERT INTO services (category, wix_form_name, service_name, company, ${WEBSITE_INFO_FIELDS.join(', ')})
+    VALUES (?, ?, ?, ?, ${WEBSITE_INFO_FIELDS.map(() => '?').join(', ')})`)
+    .run(w.category, w.match?.[0] || w.service_name, w.service_name, w.company || '',
+      ...WEBSITE_INFO_FIELDS.map((f) => w[f === 'image_url' ? 'image' : f] || ''));
+  insertOptions(Number(info.lastInsertRowid), w.options);
+}
 
-  let created = 0, skipped = 0, optionsInserted = 0;
-  const errors = [];
+// One-time switch to the website: every service takes the website's name,
+// provider, info and prices; services listed twice (the two private chefs)
+// become one; anything else from the old spreadsheet goes.
+function switchToWebsite() {
   const deleted = deletedServiceNames();
-  for (const s of SERVICE_CATALOG) {
-    if (deleted.has(s.service_name.toLowerCase())) continue;
-    let serviceId;
-    const existing = findExisting.get(s.category, s.service_name, s.wix_form_name);
-    if (existing) {
-      serviceId = existing.id;
-      skipped++;
-    } else {
-      try {
-        const info = insSvc.run(s.category, s.wix_form_name, s.service_name, s.company,
-          s.contact, s.booking_method, s.info_needed, s.internal_notes);
-        serviceId = Number(info.lastInsertRowid);
-        created++;
-      } catch (err) {
-        errors.push(`service "${s.service_name}": ${err.message}`);
-        continue;
-      }
+  const kept = new Set();
+  for (const w of WEBSITE_CATALOG) {
+    const targets = servicesFor(w).filter((t) => !kept.has(t.id));
+    if (!targets.length) {
+      if (!deleted.has(w.service_name.toLowerCase())) createFromWebsite(w);
+      continue;
     }
-
-    // Fill in any options this service is still missing — covers both a
-    // brand-new service and one that exists but was left incomplete by an
-    // earlier interrupted run. Never re-inserts an option already present.
-    const haveNames = new Set(existingOptionNames.all(serviceId).map((r) => r.option_name));
-    for (const o of s.options) {
-      if (haveNames.has(o.option_name)) continue;
-      try {
-        insOpt.run(serviceId, o.option_name, o.price, o.price_unit, o.child_price ?? 0,
-          o.min_people ?? null, o.max_people ?? null, o.downpayment_percent ?? 0, o.downpayment_fixed ?? 0,
-          o.downpayment_per_person ? 1 : 0, o.timing || '', o.notes || '');
-        optionsInserted++;
-      } catch (err) {
-        errors.push(`option "${o.option_name}" of "${s.service_name}": ${err.message}`);
+    const [main, ...extra] = targets;
+    // a second copy (e.g. the other chef company): keep its internal notes
+    const merged = { ...main };
+    for (const x of extra) {
+      for (const f of ['contact', 'booking_method', 'info_needed', 'commission', 'internal_notes', 'website_url']) {
+        const v = String(x[f] || '').trim();
+        if (!v || String(merged[f] || '').includes(v)) continue;
+        merged[f] = merged[f] ? `${merged[f]}\n${x.company ? x.company + ': ' : ''}${v}` : v;
       }
+      db.prepare(`DELETE FROM services WHERE id = ?`).run(x.id);
     }
+    db.prepare(`
+      UPDATE services SET service_name = ?, company = ?, contact = ?, booking_method = ?, info_needed = ?,
+        commission = ?, internal_notes = ?, website_url = ?, suggestions = '[]',
+        ${WEBSITE_INFO_FIELDS.map((f) => `${f} = ?`).join(', ')}, updated_at = datetime('now')
+      WHERE id = ?`)
+      .run(w.service_name, w.company || main.company || '', merged.contact || '', merged.booking_method || '',
+        merged.info_needed || '', merged.commission || '', merged.internal_notes || '', merged.website_url || '',
+        ...WEBSITE_INFO_FIELDS.map((f) => w[f === 'image_url' ? 'image' : f] || ''), main.id);
+    db.prepare(`DELETE FROM service_options WHERE service_id = ?`).run(main.id);
+    insertOptions(main.id, w.options);
+    kept.add(main.id);
   }
-
-  if (errors.length) console.error('[services seed] errors:', errors);
-  if (created || optionsInserted) {
-    console.log(`Services book import: ${created} service(s) added (${skipped} already existed), ${optionsInserted} pricing option(s) added${errors.length ? `, ${errors.length} error(s)` : ''}.`);
-  }
-  return { ok: errors.length === 0, created, skipped, options: optionsInserted, errors };
-}
-// Not offered (not on aqualuxaruba.com): the self-drive rentals that came
-// in with the spreadsheet. Removed once, and never imported again.
-if (!getSetting('removed_self_drive_v1', false)) {
+  // not on the website
   for (const name of ['ATV Rental (self-drive)', 'UTV Rental (self-drive)']) {
-    rememberDeleted(name);
-    const gone = db.prepare(`DELETE FROM services WHERE service_name = ?`).run(name);
-    if (gone.changes) console.log(`Removed service: ${name}`);
+    db.prepare(`DELETE FROM services WHERE service_name = ?`).run(name);
   }
-  setSetting('removed_self_drive_v1', true);
+  console.log(`Services now follow aqualuxaruba.com: ${kept.size} updated.`);
 }
 
-// The spreadsheet import runs at startup until it has gone through once
-// without errors; after that, prices or options someone removed stay removed.
-if (!getSetting('sheet_import_complete', false)) {
-  const r = seedServiceCatalog();
-  if (r.ok) setSetting('sheet_import_complete', true);
-}
-
+// "Import from our website" button: adds website services the CRM doesn't
+// have (unless deleted on purpose) and fills EMPTY info fields. It never
+// changes a price or anything already written.
 function importWebsiteCatalog() {
-  const FILL = ['page_url', 'image_url', 'summary', 'included', 'duration', 'location',
-    'good_to_know', 'cancellation_policy', 'website_prices', 'company'];
+  const deleted = deletedServiceNames();
   let filled = 0, created = 0;
   const errors = [];
-  const deleted = deletedServiceNames();
   for (const w of WEBSITE_CATALOG) {
     try {
-      let targets = w.match.length
-        ? db.prepare(`SELECT * FROM services WHERE wix_form_name IN (${w.match.map(() => '?').join(',')})`).all(...w.match)
-        : [];
-      if (!targets.length) {
-        targets = db.prepare(`SELECT * FROM services WHERE lower(service_name) = lower(?)`).all(w.service_name);
-      }
+      const targets = servicesFor(w);
       if (!targets.length) {
         if (deleted.has(w.service_name.toLowerCase())) continue;
-        const info = db.prepare(`
-          INSERT INTO services (category, wix_form_name, service_name, company)
-          VALUES (?, ?, ?, ?)`).run(w.category, w.service_name, w.service_name, w.company || '');
-        const id = Number(info.lastInsertRowid);
-        (w.options || []).forEach((o, i) => {
-          db.prepare(`
-            INSERT INTO service_options (service_id, option_name, price, price_unit, child_price,
-              max_people, timing, notes, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-            .run(id, o.option_name, o.price || 0, o.price_unit || 'per_person', o.child_price || 0,
-              o.max_people ?? null, o.timing || '', o.notes || '', i);
-        });
-        targets = [db.prepare(`SELECT * FROM services WHERE id = ?`).get(id)];
+        createFromWebsite(w);
         created++;
+        continue;
       }
       for (const t of targets) {
-        const sets = [];
-        const params = [];
-        for (const f of FILL) {
+        const sets = [], params = [];
+        for (const f of [...WEBSITE_INFO_FIELDS, 'company']) {
           const v = w[f === 'image_url' ? 'image' : f];
           if (v && !String(t[f] || '').trim()) { sets.push(`${f} = ?`); params.push(v); }
         }
         // the copy of our own web page is not edited by hand: keep it current
-        if (w.website_text && t.website_text !== w.website_text) { sets.push('website_text = ?'); params.push(w.website_text); }
+        if (w.website_text && t.website_text !== w.website_text && !sets.some((x) => x.startsWith('website_text'))) {
+          sets.push('website_text = ?'); params.push(w.website_text);
+        }
         if (!sets.length) continue;
         db.prepare(`UPDATE services SET ${sets.join(', ')} WHERE id = ?`).run(...params, t.id);
         filled++;
@@ -1218,12 +1175,12 @@ function importWebsiteCatalog() {
     }
   }
   if (errors.length) console.error('[website import] errors:', errors);
-  if (filled || created) console.log(`Website import: ${filled} service page(s) filled in, ${created} service(s) added.`);
   return { ok: !errors.length, filled, created, errors };
 }
-if (!getSetting('website_import_v1', false)) {
-  importWebsiteCatalog();
-  setSetting('website_import_v1', true);
+
+if (!getSetting('website_only_v1', false)) {
+  switchToWebsite();
+  setSetting('website_only_v1', true);
 }
 
 // One-time cleanup: remove leads/clients mistakenly created from payment-
