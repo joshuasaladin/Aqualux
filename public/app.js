@@ -1474,6 +1474,118 @@ function toast(msg, kind = '') {
   toast.t = setTimeout(() => el.classList.remove('show'), kind === 'err' ? 7000 : 4500);
 }
 
+/* ------------------------------------------- website set-up guide ---- */
+// One-time steps in the Wix Editor so the website's service pages show the
+// "Aqua Lux Services" collection the CRM keeps up to date. Wording of the
+// Wix menus follows Wix's Help Center articles on dynamic pages, linking to
+// dynamic pages and the URL Redirect Manager.
+const GUIDE_DONE_KEY = 'aqualux_guide_done';
+function guideDone() { try { return new Set(JSON.parse(localStorage.getItem(GUIDE_DONE_KEY) || '[]')); } catch { return new Set(); } }
+
+function openGuide(st = {}) {
+  const pages = st.pages || [];
+  const done = guideDone();
+  const step = (id, title, minutes, body) => `
+    <section class="guide-step ${done.has(id) ? 'is-done' : ''}" data-step="${id}">
+      <label class="guide-check"><input type="checkbox" ${done.has(id) ? 'checked' : ''}> <span>${title}</span>
+        ${minutes ? `<small>${minutes}</small>` : ''}</label>
+      <div class="guide-body">${body}</div>
+    </section>`;
+  const fieldRows = [
+    ['The service name (big title)', 'Service name'],
+    ['“By …” line under the title', 'Provider'],
+    ['Main photo', 'Photo — and set <i>Alt text connects to</i> → Service name'],
+    ['Price line near the top', 'Price from'],
+    ['Description', 'About'],
+    ['Text under your “What’s included” heading', 'What’s included'],
+    ['Times / duration', 'Duration & times'],
+    ['Meeting point', 'Location'],
+    ['Text under your “Prices” heading', 'Prices'],
+    ['Text under your “Good to know” heading', 'Good to know'],
+    ['Text under your “Cancellation policy” heading', 'Cancellation policy']
+  ];
+  const services = pages.map((p) => p.name);
+  $('#guide-content').innerHTML = `
+    <h2 class="guide-title">Set up the service page on aqualuxaruba.com</h2>
+    <p class="guide-intro">Do this once in the Wix Editor. Afterwards every service on your website comes from the CRM: change a price or a description on the Services page here and the website updates by itself within seconds.
+      Your current pages stay live until step 7, so nothing breaks while you work. Tick each step when it’s done — this page remembers.</p>
+
+    ${step('connect', 'Connect the CRM to your website', '5 min', `
+      <p>In the CRM go to <b>Settings → Website</b>, paste a Wix API key and press <b>Connect</b> (the panel tells you how to create the key). The CRM then sends all your services to the website.
+      ${st.connected ? '<span class="guide-ok">✓ Connected</span>' : '<span class="guide-todo">Not connected yet</span>'}</p>`)}
+
+    ${step('page', 'Add the service page', '5 min', `
+      <ol>
+        <li>Open your site in the <b>Wix Editor</b>.</li>
+        <li>Click <b>CMS</b> on the left side of the editor, then <b>Your Collections</b>.</li>
+        <li>Hover over <b>Aqua Lux Services</b>, click the <b>More Actions</b> icon and click <b>Add dynamic page</b>.</li>
+        <li>Select <b>Item page</b> and click <b>Add to Site</b>. A page called <b>Aqua Lux Services (Item)</b> appears.</li>
+      </ol>
+      <p class="guide-note">Don’t use the collection called “Services” — that one is an old template leftover with sample beauty services.</p>`)}
+
+    ${step('address', 'Give the page its web address', '3 min', `
+      <ol>
+        <li>Click <b>Pages &amp; Menu</b> on the left, then <b>Dynamic Pages</b>.</li>
+        <li>Hover over <b>Aqua Lux Services (Item)</b>, click the <b>More Actions</b> icon and click <b>SEO</b>.</li>
+        <li>Click <b>Edit</b> next to <b>URL slug structure</b>. Make it <code>services/{Page address}</code>: type <code>services</code> as the fixed part, use <b>+ Add Variable</b> to add the <b>Page address</b> field, and remove any other variable.</li>
+        <li>Click <b>Save</b>, then <b>Replace URLs</b>.</li>
+      </ol>
+      <p>Each service now has its own address, for example <code>aqualuxaruba.com/services/jolly-pirates</code>.</p>`)}
+
+    ${step('design', 'Design the page and connect it', '30–60 min', `
+      <p><b>Tip:</b> to keep today’s look, open one of your current service pages (Jolly Pirates, say), select its title, photo, text boxes and headings, copy them and paste them onto the new page. Then connect each one:</p>
+      <ol>
+        <li>Click the element, then click the <b>Connect to CMS</b> icon.</li>
+        <li>In <b>Text connects to</b> (for a photo: <b>Image source connects to</b>) choose the field below.</li>
+      </ol>
+      <table class="guide-table"><thead><tr><th>On the page</th><th>Connect to</th></tr></thead>
+        <tbody>${fieldRows.map(([a, b]) => `<tr><td>${a}</td><td><b>${b}</b></td></tr>`).join('')}</tbody></table>
+      <p>Headings such as “What’s included”, “Prices” or “Good to know” stay as normal text — don’t connect them. The bullet points and bold option names in <i>What’s included</i>, <i>Good to know</i> and <i>Prices</i> come from the CRM automatically.</p>
+      <p>Use <b>Preview</b> and the arrows in the Preview toolbar to flip through all services and check each one looks right.</p>`)}
+
+    ${step('form', 'Add the inquiry form', '10 min', `
+      <ol>
+        <li>Copy the inquiry form (“Inquire Now!”) from one of your current service pages and paste it onto the new page.</li>
+        <li>In the form’s settings, name the form exactly <code>Service Inquiry</code> — the CRM recognises it by this name.</li>
+        <li>Keep the field <b>Choose The Activity</b> and make its choices your services, spelled like this:
+          <div class="guide-chips">${services.map((n) => `<span>${esc(n)}</span>`).join('') || '<i>(your services)</i>'}</div></li>
+        <li>Keep the other fields as they are (first and last name, email, people, date, where they’re staying, questions).</li>
+      </ol>
+      <p>Inquiries still arrive in your Gmail and become leads in the CRM, named after the service the guest picked.</p>`)}
+
+    ${step('publish', 'Publish and point your links to the new page', '15 min', `
+      <ol>
+        <li>Click <b>Publish</b>.</li>
+        <li>On each category page (Water Activities, Adventures &amp; Culture, Relaxation, Private Cuisine, Moments, Transport &amp; More) and in your menu, click each service’s button or image, click the <b>Link</b> icon, choose <b>Aqua Lux Services (Item)</b> under <b>Dynamic pages</b> in <b>Which page?</b>, then pick the service in <b>Which item?</b>.</li>
+        <li>Publish again and click through every service on the live site.</li>
+      </ol>`)}
+
+    ${step('redirects', 'Remove the old pages and redirect their addresses', '15 min', `
+      <ol>
+        <li>In <b>Pages &amp; Menu</b>, delete the old service pages listed below and publish.</li>
+        <li>Open your <b>SEO Dashboard</b>, scroll to <b>Tools and settings</b> and click <b>Go to URL Redirect Manager</b>.</li>
+        <li>Click <b>+ New Redirect</b> → <b>Single redirect</b>. Enter the old address under <b>Old URL</b>, start typing the new one and pick it, then click <b>Save &amp; Add Another</b>. Repeat for every row.</li>
+      </ol>
+      <table class="guide-table"><thead><tr><th>Service</th><th>Old URL</th><th>New URL</th></tr></thead>
+        <tbody>${pages.filter((p) => p.old).map((p) => `<tr><td>${esc(p.name)}</td><td><code>${esc(p.old)}</code></td><td><code>${esc(p.new)}</code></td></tr>`).join('') ||
+          '<tr><td colspan="3">Connect the CRM first to see the list.</td></tr>'}</tbody></table>
+      <p>Old links and Google results then lead straight to the new pages.</p>`)}
+
+    <p class="guide-outro">That’s it. From now on change services only in the CRM. The “Fix on aqualuxaruba.com” list should stay empty, because the website shows exactly what the CRM has.</p>`;
+
+  $('#guide-content').querySelectorAll('.guide-step input[type=checkbox]').forEach((cb) => cb.addEventListener('change', () => {
+    const sec = cb.closest('.guide-step');
+    const d = guideDone();
+    if (cb.checked) d.add(sec.dataset.step); else d.delete(sec.dataset.step);
+    try { localStorage.setItem(GUIDE_DONE_KEY, JSON.stringify([...d])); } catch { /* private mode */ }
+    sec.classList.toggle('is-done', cb.checked);
+  }));
+  $('#guide-backdrop').classList.remove('hidden');
+  $('#guide-backdrop .guide-modal').scrollTop = 0;
+}
+$('#guide-close').addEventListener('click', () => $('#guide-backdrop').classList.add('hidden'));
+$('#guide-backdrop').addEventListener('click', (e) => { if (e.target === $('#guide-backdrop')) $('#guide-backdrop').classList.add('hidden'); });
+
 /* ------------------------------------------------------------ clients --- */
 async function loadClients() {
   const q = $('#client-search').value;
@@ -1752,6 +1864,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   // close the top-most layer only
   if (!$('#lightbox').classList.contains('hidden')) $('#lightbox').classList.add('hidden');
+  else if (!$('#guide-backdrop').classList.contains('hidden')) $('#guide-backdrop').classList.add('hidden');
   else if (!$('#day-backdrop').classList.contains('hidden')) closeDayView();
   else if (!$('#drawer').classList.contains('hidden')) closeDrawer();
   else if (!$('#svc-drawer').classList.contains('hidden')) closeServicePage();
@@ -2445,7 +2558,8 @@ async function renderWixPanel() {
       </div>
     </div>
     <span class="send-status" id="wix-status"></span>
-    <p class="reply-hint" style="margin-top:10px">Every change you save on a service is sent to the <b>Aqua Lux Services</b> collection on your Wix site within a few seconds, and the service page on the website shows it. Commission, contacts and internal notes are never sent.</p>`
+    <p class="reply-hint" style="margin-top:10px">Every change you save on a service is sent to the <b>Aqua Lux Services</b> collection on your Wix site within a few seconds, and the service page on the website shows it. Commission, contacts and internal notes are never sent.</p>
+    <button class="btn btn-sm guide-btn" id="wix-guide">📘 Set-up guide: the service page in the Wix Editor</button>`
   : `
     <p class="reply-hint" style="margin-bottom:10px">Connect your Wix site so the service pages on aqualuxaruba.com always show what’s in the CRM.</p>
     <ol class="steps">
@@ -2457,7 +2571,8 @@ async function renderWixPanel() {
       <input type="password" id="wix-key" autocomplete="off" spellcheck="false" placeholder="Wix API key">
       <button class="btn btn-primary" id="wix-save">Connect</button>
     </div>
-    <span class="send-status" id="wix-status"></span>`;
+    <span class="send-status" id="wix-status"></span>
+    <button class="btn btn-sm guide-btn" id="wix-guide">📘 Set-up guide: the service page in the Wix Editor</button>`;
 
   const status = $('#wix-status');
   const run = async (label, fn) => {
@@ -2487,6 +2602,7 @@ async function renderWixPanel() {
     const r = await api('/wix/publish', { method: 'POST', body: '{}' });
     return `Sent ✓ — ${r.saved} service${r.saved === 1 ? '' : 's'} updated${r.removed ? `, ${r.removed} hidden` : ''}.`;
   }));
+  $('#wix-guide')?.addEventListener('click', () => openGuide(st));
   $('#wix-remove')?.addEventListener('click', async () => {
     if (!confirm('Disconnect the website? Changes in the CRM stop going to aqualuxaruba.com until you connect again.')) return;
     await api('/wix/key', { method: 'DELETE' });

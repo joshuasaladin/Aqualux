@@ -383,9 +383,12 @@ export function parseFormSubmission(from, bodyText) {
     .filter(([label]) => !/^(submission summary|view submissions?)$/i.test(label))
     .map(([label, value]) => `${label}: ${value}`).join('\n');
 
+  // The shared form on the website's service page ("Service Inquiry") has a
+  // "Choose The Activity" list of every service: the lead is named after it.
+  const shared = /^service inquir(y|ies)$/i.test(formName) && activity;
   return {
-    formName: formName || 'Website form',
-    service: [formName, activity].filter(Boolean).join(' — ') || activity || 'Website inquiry',
+    formName: shared ? activity : (formName || 'Website form'),
+    service: shared ? activity : ([formName, activity].filter(Boolean).join(' — ') || activity || 'Website inquiry'),
     name, email, phone, partySize, serviceDate, details
   };
 }

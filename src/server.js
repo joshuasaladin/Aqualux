@@ -993,7 +993,14 @@ app.get('/api/wix/status', (req, res) => {
   const { apiKey, siteId } = wix.wixConfig();
   const last = db.prepare(`SELECT MAX(wix_published_at) t FROM services`).get().t;
   const errors = db.prepare(`SELECT COUNT(*) n FROM services WHERE wix_error != ''`).get().n;
-  res.json({ connected: !!apiKey, siteId, hint: apiKey ? `…${apiKey.slice(-4)}` : '', last_published: last, errors,
+  // each service's old page address and its new one (for the set-up guide's redirects)
+  const pages = db.prepare(`SELECT * FROM services WHERE on_website != 0 ORDER BY category, service_name`).all()
+    .map((sv) => ({
+      name: sv.service_name,
+      old: String(sv.page_url || '').match(/aqualuxaruba\.com(\/[a-z0-9-]+)\/?$/i)?.[1] || '',
+      new: `/services/${wix.slugFor(sv)}`
+    }));
+  res.json({ connected: !!apiKey, siteId, hint: apiKey ? `…${apiKey.slice(-4)}` : '', last_published: last, errors, pages,
     source: getSetting('wix_api_key', '') ? 'settings' : apiKey ? 'environment' : null });
 });
 
