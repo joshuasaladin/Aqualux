@@ -7,6 +7,7 @@ import { db, dataDir, touchLead, upsertClient, setSetting, getSetting, markThrea
 import * as gmail from './gmail.js';
 import { WEBSITE_CATALOG } from './website-catalog.js';
 import * as ai from './ai.js';
+import * as wix from './wix.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -813,6 +814,7 @@ app.post('/api/services', (req, res) => {
     VALUES (${SERVICE_TEXT_FIELDS.map(() => '?').join(', ')})`)
     .run(...SERVICE_TEXT_FIELDS.map((f) => String(b[f] ?? '').trim().slice(0, 20000)));
   const newIds = saveOptions(Number(info.lastInsertRowid), b.options);
+  wix.schedulePublish(Number(info.lastInsertRowid));
   res.status(201).json({ ...getServiceFull(info.lastInsertRowid), new_option_ids: newIds });
 });
 
@@ -832,7 +834,11 @@ app.patch('/api/services/:id', (req, res) => {
     params.push(req.params.id);
     db.prepare(`UPDATE services SET ${sets.join(', ')} WHERE id = ?`).run(...params);
   }
+  if (b.on_website !== undefined) {
+    db.prepare(`UPDATE services SET on_website = ? WHERE id = ?`).run(b.on_website ? 1 : 0, req.params.id);
+  }
   const newIds = saveOptions(Number(req.params.id), b.options);
+  wix.schedulePublish(req.params.id);
   res.json({ ...getServiceFull(req.params.id), new_option_ids: newIds });
 });
 
@@ -844,8 +850,11 @@ function rememberDeleted(name) {
 }
 
 app.delete('/api/services/:id', (req, res) => {
-  const svc = db.prepare(`SELECT service_name FROM services WHERE id = ?`).get(req.params.id);
+  const svc = db.prepare(`SELECT * FROM services WHERE id = ?`).get(req.params.id);
   if (svc) rememberDeleted(svc.service_name);
+  if (svc && wix.wixConnected()) {
+    wix.removeItem(wix.slugFor(svc)).catch((err) => console.error(`[wix] remove ${svc.service_name}: ${err.message}`));
+  }
   db.prepare(`DELETE FROM services WHERE id = ?`).run(req.params.id);
   res.json({ ok: true });
 });
@@ -906,6 +915,7 @@ app.post('/api/services/:id/check', async (req, res) => {
       .map((i) => ({ id: crypto.randomBytes(5).toString('hex'), topic: String(i.topic), website_says: String(i.website_says || ''), should_say: String(i.should_say || '') }));
     db.prepare(`UPDATE services SET site_issues = ?, check_summary = ?, site_checked_at = datetime('now') WHERE id = ?`)
       .run(JSON.stringify(issues), String(data.summary || '').slice(0, 2000), svc.id);
+    if (data.mode === 'provider') wix.schedulePublish(svc.id);
     res.json(getServiceFull(svc.id));
   } catch (err) {
     const e = ai.friendlyError(err);
@@ -959,6 +969,7 @@ app.post('/api/services/:id/undo', (req, res) => {
     ins.run(o.id, req.params.id, o.option_name, o.price, o.price_unit, o.child_price, o.min_people, o.max_people,
       o.downpayment_percent, o.downpayment_fixed, o.downpayment_per_person, o.timing, o.notes, o.sort_order);
   }
+  wix.schedulePublish(req.params.id);
   res.json(getServiceFull(req.params.id));
 });
 
@@ -975,6 +986,44 @@ app.post('/api/services/:id/site-issues/:iid/done', (req, res) => {
   const left = svc.site_issues.filter((i) => req.params.iid !== 'all' && i.id !== req.params.iid);
   db.prepare(`UPDATE services SET site_issues = ? WHERE id = ?`).run(JSON.stringify(left), svc.id);
   res.json(getServiceFull(svc.id));
+});
+
+// ------------------------------------------------------------- website --
+app.get('/api/wix/status', (req, res) => {
+  const { apiKey, siteId } = wix.wixConfig();
+  const last = db.prepare(`SELECT MAX(wix_published_at) t FROM services`).get().t;
+  const errors = db.prepare(`SELECT COUNT(*) n FROM services WHERE wix_error != ''`).get().n;
+  res.json({ connected: !!apiKey, siteId, hint: apiKey ? `…${apiKey.slice(-4)}` : '', last_published: last, errors,
+    source: getSetting('wix_api_key', '') ? 'settings' : apiKey ? 'environment' : null });
+});
+
+app.post('/api/wix/key', (req, res) => {
+  const key = String(req.body?.key || '').trim();
+  if (key.length < 20) return res.status(400).json({ error: 'Paste the whole API key from your Wix account.' });
+  setSetting('wix_api_key', key);
+  if (req.body?.site_id) setSetting('wix_site_id', String(req.body.site_id).trim());
+  res.json({ ok: true });
+});
+
+app.delete('/api/wix/key', (req, res) => {
+  setSetting('wix_api_key', '');
+  res.json({ ok: true });
+});
+
+app.post('/api/wix/test', async (req, res) => {
+  try { res.json(await wix.testConnection()); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Publish one service (?id=) or all of them to the website now.
+app.post('/api/wix/publish', async (req, res) => {
+  try {
+    const ids = req.body?.id ? [Number(req.body.id)] : null;
+    const r = await wix.publish(ids);
+    res.json({ ...r, service: ids ? getServiceFull(ids[0]) : undefined });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // ---------------------------------------------------------- AI assistant --

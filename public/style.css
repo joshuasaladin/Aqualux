@@ -775,6 +775,22 @@ main.wide { max-width: 1750px; }
 .prop-old.prop-empty { text-decoration: none; font-style: italic; }
 .prop-new { color: #0f6b43; background: #eaf7f0; border-radius: 8px; padding: 6px 9px; overflow-wrap: anywhere; }
 .prop-why { color: var(--muted); font-size: .8rem; margin-top: 5px; }
+.svc-live {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px;
+  border-radius: 12px; padding: 10px 14px; font-size: .86rem; border: 1px solid var(--border); background: #fff;
+  box-shadow: var(--shadow-sm);
+}
+.svc-live.on { border-color: #bfe3cf; background: linear-gradient(180deg, #f3fbf6, #fff); }
+.svc-live.err { border-color: #f5cdc7; background: #fff7f6; }
+.svc-live.hidden-svc { background: #f7f9fa; color: var(--muted); }
+.svc-live.off { color: var(--muted); }
+.svc-live.off a { color: var(--aqua-dark); font-weight: 600; }
+.svc-live-toggle { display: flex; align-items: center; gap: 7px; font-weight: 650; color: var(--navy); cursor: pointer; }
+.svc-live-toggle input { width: auto; accent-color: var(--green); transform: scale(1.15); }
+.svc-live-state { flex: 1; min-width: 180px; color: #3c4b59; display: flex; align-items: center; gap: 7px; }
+.svc-live.on .svc-live-state { color: #11663f; }
+.err-text { color: var(--red); }
+.web-orb { background: linear-gradient(135deg, #0f6f8a, #18925a); }
 .changes-panel .prop { border-top-color: #e3eef2; }
 .changes-panel { border-color: #cfe7ee; background: linear-gradient(180deg, #f7fcfd, #fff); }
 .changes-panel .props-head h3 { color: var(--aqua-dark); }
