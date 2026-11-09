@@ -1078,6 +1078,8 @@ function optionEditRow(o = {}) {
       <label class="opt-field opt-check"><input type="checkbox" class="opt-dp-pp" ${o.downpayment_per_person ? 'checked' : ''}> $ per person</label>
     </div>
     <label class="opt-field">Notes<input class="opt-notes" value="${esc(o.notes || '')}"></label>
+    <label class="opt-field">Details for the website <span class="opt-hint">— what this tour includes, one item per line. Shown when a visitor opens it.</span>
+      <textarea class="opt-web auto-grow" rows="2">${esc(o.web_details || '')}</textarea></label>
   </div>`;
 }
 
@@ -1236,7 +1238,8 @@ async function openService(id) {
       downpayment_percent: row.querySelector('.opt-dp-pct').value,
       downpayment_fixed: row.querySelector('.opt-dp-fix').value,
       downpayment_per_person: row.querySelector('.opt-dp-pp').checked,
-      notes: row.querySelector('.opt-notes').value
+      notes: row.querySelector('.opt-notes').value,
+      web_details: row.querySelector('.opt-web').value
     }));
   }
   function applySaved(updated) {
@@ -1278,7 +1281,10 @@ async function openService(id) {
     el.addEventListener('blur', () => saveNow());
   });
   const optRows = $('#svc-opts');
-  optRows.addEventListener('input', () => { optsDirty = true; schedule(); });
+  optRows.addEventListener('input', (e) => {
+    if (e.target.classList.contains('auto-grow')) grow(e.target);
+    optsDirty = true; schedule();
+  });
   optRows.addEventListener('change', () => { optsDirty = true; schedule(250); });
   optRows.addEventListener('click', (e) => {
     const del = e.target.closest('.opt-del');
@@ -1367,6 +1373,7 @@ async function openService(id) {
       if (document.activeElement !== el) { el.value = updated[el.dataset.f] ?? ''; if (el.classList.contains('auto-grow')) grow(el); }
     }
     optRows.innerHTML = updated.options.map((o) => optionEditRow(o)).join('');
+    optRows.querySelectorAll('.auto-grow').forEach(grow);
     if (updated.provider_text) {
       $('#svc-provider-text').innerHTML = textToHtml(updated.provider_text);
       $('#svc-provider-source').classList.remove('hidden');
@@ -1479,6 +1486,45 @@ function toast(msg, kind = '') {
 // "Aqua Lux Services" collection the CRM keeps up to date. Wording of the
 // Wix menus follows Wix's Help Center articles on dynamic pages, linking to
 // dynamic pages and the URL Redirect Manager.
+// Page code for the website's service page: tour cards that open and close.
+const TOUR_CODE = `import wixData from 'wix-data';
+
+$w.onReady(function () {
+  // each tour card: name, price and times; tap it to open or close the details
+  $w('#toursRepeater').onItemReady(($item, tour) => {
+    $item('#tourName').text = tour.title || '';
+    $item('#tourPrice').text = [tour.priceLine, tour.times].filter(Boolean).join('  ·  ');
+    $item('#tourDetails').html = tour.details || '';
+    $item('#tourDetails').collapse();
+    $item('#tourArrow').text = '+';
+    const toggle = () => {
+      if ($item('#tourDetails').collapsed) {
+        $item('#tourDetails').expand();
+        $item('#tourArrow').text = '−';
+      } else {
+        $item('#tourDetails').collapse();
+        $item('#tourArrow').text = '+';
+      }
+    };
+    $item('#tourName').onClick(toggle);
+    $item('#tourPrice').onClick(toggle);
+    $item('#tourArrow').onClick(toggle);
+  });
+
+  // only this service's tours, in the order they have in the CRM
+  $w('#dynamicDataset').onReady(async () => {
+    const service = $w('#dynamicDataset').getCurrentItem();
+    const results = await wixData.query('AquaLuxTours')
+      .eq('serviceSlug', service.slug)
+      .ascending('order')
+      .find();
+    if (results.items.length) {
+      $w('#toursRepeater').data = results.items;
+      $w('#toursRepeater').expand();
+    }
+  });
+});
+`;
 const GUIDE_DONE_KEY = 'aqualux_guide_done';
 function guideDone() { try { return new Set(JSON.parse(localStorage.getItem(GUIDE_DONE_KEY) || '[]')); } catch { return new Set(); } }
 
@@ -1500,7 +1546,7 @@ function openGuide(st = {}) {
     ['Text under your “What’s included” heading', 'What’s included'],
     ['Times / duration', 'Duration & times'],
     ['Meeting point', 'Location'],
-    ['Text under your “Prices” heading', 'Prices'],
+    ['Text under your “Prices” heading (replaced by tour cards in the next step)', 'Prices'],
     ['Text under your “Good to know” heading', 'Good to know'],
     ['Text under your “Cancellation policy” heading', 'Cancellation policy']
   ];
@@ -1508,7 +1554,7 @@ function openGuide(st = {}) {
   $('#guide-content').innerHTML = `
     <h2 class="guide-title">Set up the service page on aqualuxaruba.com</h2>
     <p class="guide-intro">Do this once in the Wix Editor. Afterwards every service on your website comes from the CRM: change a price or a description on the Services page here and the website updates by itself within seconds.
-      Your current pages stay live until step 7, so nothing breaks while you work. Tick each step when it’s done — this page remembers.</p>
+      Your current pages stay live until step 8, so nothing breaks while you work. Tick each step when it’s done — this page remembers.</p>
 
     ${step('connect', 'Connect the CRM to your website', '5 min', `
       <p>In the CRM go to <b>Settings → Website</b>, paste a Wix API key and press <b>Connect</b> (the panel tells you how to create the key). The CRM then sends all your services to the website.
@@ -1542,6 +1588,26 @@ function openGuide(st = {}) {
         <tbody>${fieldRows.map(([a, b]) => `<tr><td>${a}</td><td><b>${b}</b></td></tr>`).join('')}</tbody></table>
       <p>Headings such as “What’s included”, “Prices” or “Good to know” stay as normal text — don’t connect them. The bullet points and bold option names in <i>What’s included</i>, <i>Good to know</i> and <i>Prices</i> come from the CRM automatically.</p>
       <p>Use <b>Preview</b> and the arrows in the Preview toolbar to flip through all services and check each one looks right.</p>`)}
+
+    ${step('tours', 'Tour cards that open and close', '20–30 min', `
+      <p>Each tour (Morning Tour, Sunset Tour…) becomes a card with its name and price. Tapping it opens what that tour includes. The CRM fills these from each price option’s <b>Details for the website</b> box.</p>
+      <ol>
+        <li>Delete the text box you connected to <b>Prices</b> — the cards replace it.</li>
+        <li>Click <b>Add Elements</b> on the left side of the editor, click <b>List</b> and drag a repeater onto the page where the prices were. Don’t connect it to the CMS.</li>
+        <li>In the first card of the repeater, keep or add four text boxes: the tour name, the price, a small “+” on the right, and a paragraph below them for the details. Delete anything else in the card.</li>
+        <li>Turn on <b>Dev Mode</b> at the top of the editor. Then click each element and set its ID in the <b>Properties &amp; Events</b> panel:
+          <table class="guide-table"><tbody>
+            <tr><td>The repeater</td><td><code>toursRepeater</code></td></tr>
+            <tr><td>Tour name text</td><td><code>tourName</code></td></tr>
+            <tr><td>Price text</td><td><code>tourPrice</code></td></tr>
+            <tr><td>The “+” text</td><td><code>tourArrow</code></td></tr>
+            <tr><td>Details paragraph</td><td><code>tourDetails</code></td></tr>
+          </tbody></table>
+          In the same panel, tick <b>Collapsed on load</b> for the repeater, so visitors never see the sample cards.</li>
+        <li>Check the page’s dataset ID: click the dataset (or the Connect to CMS panel’s <b>Dataset Settings</b>) and look at <b>Dataset ID</b>. The code expects <code>dynamicDataset</code> — if yours is different, change it in the code (two places).</li>
+        <li>Open the page’s code panel at the bottom of the editor, replace what’s there with the code below, and click <b>Preview</b> to try it.</li>
+      </ol>
+      <div class="guide-code"><button class="btn btn-sm" id="guide-copy">Copy code</button><pre id="guide-code-text">${esc(TOUR_CODE)}</pre></div>`)}
 
     ${step('form', 'Add the inquiry form', '10 min', `
       <ol>
@@ -1580,6 +1646,14 @@ function openGuide(st = {}) {
     try { localStorage.setItem(GUIDE_DONE_KEY, JSON.stringify([...d])); } catch { /* private mode */ }
     sec.classList.toggle('is-done', cb.checked);
   }));
+  $('#guide-copy')?.addEventListener('click', async (e) => {
+    try { await navigator.clipboard.writeText(TOUR_CODE); e.target.textContent = 'Copied ✓'; }
+    catch {
+      const r = document.createRange(); r.selectNodeContents($('#guide-code-text'));
+      const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+      e.target.textContent = 'Selected — press Ctrl+C';
+    }
+  });
   $('#guide-backdrop').classList.remove('hidden');
   $('#guide-backdrop .guide-modal').scrollTop = 0;
 }
