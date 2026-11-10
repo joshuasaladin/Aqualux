@@ -311,12 +311,7 @@ for (const [col, def] of [
   ['last_changes', `last_changes TEXT DEFAULT '[]'`],
   ['undo_snapshot', `undo_snapshot TEXT DEFAULT ''`],
   ['site_issues', `site_issues TEXT DEFAULT '[]'`],
-  ['site_checked_at', 'site_checked_at TEXT'],
-  // publishing to the website's "Services" collection (src/wix.js)
-  ['on_website', 'on_website INTEGER NOT NULL DEFAULT 1'],
-  ['wix_slug', `wix_slug TEXT DEFAULT ''`],
-  ['wix_published_at', 'wix_published_at TEXT'],
-  ['wix_error', `wix_error TEXT DEFAULT ''`]
+  ['site_checked_at', 'site_checked_at TEXT']
 ]) ensureColumn('services', col, def);
 ensureColumn('leads', 'gcal_sig', 'gcal_sig TEXT');
 // Each booked service is confirmed on its own; a lead counts as confirmed

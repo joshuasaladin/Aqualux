@@ -937,11 +937,9 @@ function renderServiceGrid() {
 
 const FIX_CAT = '__fix';
 
-let wixState = { connected: false };
-
 async function loadServices() {
   serviceBookPromise = null; // the booking suggestions re-read any edits made here
-  [allServices, wixState] = await Promise.all([api('/services'), api('/wix/status').catch(() => ({ connected: false }))]);
+  allServices = await api('/services');
   renderServiceGrid();
 }
 
@@ -1148,7 +1146,6 @@ async function openService(id) {
   </div>
 
   <div class="svc-page">
-    <div class="svc-live" id="svc-live"></div>
     <div class="panel svc-web-panel">
       <h3>Where this page’s info comes from</h3>
       <ol class="source-order">
@@ -1261,7 +1258,6 @@ async function openService(id) {
       try {
         applySaved(await api('/services/' + id, { method: 'PATCH', body: JSON.stringify(body) }));
         showSaved('Saved ✓', 'ok');
-        if (wixState.connected) followWebsite();
         setTimeout(() => { if (savedEl.textContent === 'Saved ✓') showSaved(''); }, 1800);
       } catch (err) {
         Object.assign(dirty, body); delete dirty.options;
@@ -1307,61 +1303,6 @@ async function openService(id) {
   }
   renderCheckInfo();
 
-  // --- is this service on aqualuxaruba.com? ---
-  let liveSending = false, liveTimer = null;
-  function renderLive() {
-    const el = $('#svc-live');
-    if (!el) return;
-    if (!wixState.connected) {
-      el.className = 'svc-live off';
-      el.innerHTML = `🌐 Not linked to the website yet — <a href="#" id="svc-live-settings">connect aqualuxaruba.com in Settings</a> and changes here go to the website automatically.`;
-      $('#svc-live-settings').addEventListener('click', (e) => { e.preventDefault(); closeServicePage(); showView('settings'); });
-      return;
-    }
-    const on = s.on_website !== 0;
-    const state = liveSending ? '<span class="ai-spinner"></span> Sending your changes to the website…'
-      : !on ? 'Hidden — this service is not shown on the website.'
-      : s.wix_error ? `<span class="err-text">Couldn’t update the website: ${esc(s.wix_error)}</span>`
-      : s.wix_published_at ? `Live on the website · updated ${esc(timeAgo(s.wix_published_at))}`
-      : 'Not sent yet.';
-    el.className = `svc-live ${on ? 'on' : 'hidden-svc'} ${s.wix_error && !liveSending ? 'err' : ''}`;
-    el.innerHTML = `
-      <label class="svc-live-toggle"><input type="checkbox" id="svc-on-web" ${on ? 'checked' : ''}> Show on aqualuxaruba.com</label>
-      <span class="svc-live-state">${state}</span>
-      <button class="btn btn-sm" id="svc-send-now" ${liveSending ? 'disabled' : ''}>Send now</button>`;
-    $('#svc-on-web').addEventListener('change', async (e) => {
-      try {
-        applySaved(await api('/services/' + id, { method: 'PATCH', body: JSON.stringify({ on_website: e.target.checked }) }));
-        followWebsite();
-      } catch (err) { toast(err.message, 'err'); }
-    });
-    $('#svc-send-now').addEventListener('click', async () => {
-      await saveNow(); await saving;
-      liveSending = true; renderLive();
-      try {
-        const r = await api('/wix/publish', { method: 'POST', body: JSON.stringify({ id }) });
-        if (r.service) applySaved(r.service);
-      } catch (err) { s.wix_error = err.message; }
-      liveSending = false; renderLive();
-    });
-  }
-  // the server sends a saved change a few seconds later; show when it's done
-  function followWebsite() {
-    liveSending = true; renderLive();
-    clearTimeout(liveTimer);
-    liveTimer = setTimeout(async () => {
-      try {
-        const fresh = (await api('/services')).find((x) => x.id === id);
-        if (fresh) {
-          s.wix_published_at = fresh.wix_published_at; s.wix_error = fresh.wix_error; s.on_website = fresh.on_website;
-          const i = allServices.findIndex((x) => x.id === id); if (i >= 0) Object.assign(allServices[i], { wix_published_at: fresh.wix_published_at, wix_error: fresh.wix_error });
-        }
-      } catch { /* shown next time */ }
-      liveSending = false; renderLive();
-    }, 6500);
-  }
-  renderLive();
-
   function refreshForm(updated) {
     for (const el of drawer.querySelectorAll('.sf')) {
       if (document.activeElement !== el) { el.value = updated[el.dataset.f] ?? ''; if (el.classList.contains('auto-grow')) grow(el); }
@@ -1403,7 +1344,6 @@ async function openService(id) {
         const updated = await api(`/services/${id}/undo`, { method: 'POST' });
         applySaved(updated); refreshForm(updated); renderResults();
         showSaved('Undone ✓', 'ok');
-        if (wixState.connected) followWebsite();
       } catch (err) { toast(err.message, 'err'); e.target.disabled = false; }
     });
     $('#svc-changes-ok')?.addEventListener('click', async () => {
@@ -1437,7 +1377,6 @@ async function openService(id) {
       refreshForm(updated);
       renderCheckInfo();
       renderResults();
-      if (wixState.connected && updated.last_changes.length) followWebsite();
       const target = updated.last_changes.length ? '#svc-changes' : updated.site_issues.length ? '#svc-issues' : null;
       if (target) $(target).scrollIntoView({ behavior: 'smooth', block: 'start' });
       else toast('All good — aqualuxaruba.com matches this service.');
@@ -2422,81 +2361,8 @@ async function renderAiPanel() {
   });
 }
 
-function agoText(iso) {
-  if (!iso) return '';
-  return timeAgo(iso.includes('T') ? iso : iso.replace(' ', 'T') + 'Z');
-}
-
-async function renderWixPanel() {
-  const panel = $('#wix-panel');
-  let st;
-  try { st = await api('/wix/status'); } catch { st = { connected: false }; }
-  panel.innerHTML = st.connected ? `
-    <div class="ai-connected">
-      <span class="ai-orb web-orb">🌐</span>
-      <div>
-        <div class="who">Connected to aqualuxaruba.com</div>
-        <div class="reply-hint">API key ${esc(st.hint)}${st.last_published ? ` · last update sent ${esc(agoText(st.last_published))}` : ''}${st.errors ? ` · <span class="err-text">${st.errors} service${st.errors === 1 ? '' : 's'} couldn’t be sent</span>` : ''}</div>
-      </div>
-      <div class="ai-connected-actions">
-        <button class="btn btn-sm" id="wix-publish-all">Send all services now</button>
-        <button class="btn btn-sm" id="wix-test">Test</button>
-        ${st.source === 'settings' ? '<button class="btn btn-sm btn-danger" id="wix-remove">Disconnect</button>' : ''}
-      </div>
-    </div>
-    <span class="send-status" id="wix-status"></span>
-    <p class="reply-hint" style="margin-top:10px">Every change you save on a service is sent to the <b>Aqua Lux Services</b> collection on your Wix site within a few seconds, and the service page on the website shows it. Commission, contacts and internal notes are never sent.</p>`
-  : `
-    <p class="reply-hint" style="margin-bottom:10px">Connect your Wix site so the service pages on aqualuxaruba.com always show what’s in the CRM.</p>
-    <ol class="steps">
-      <li>Open the <a href="https://manage.wix.com/account/api-keys" target="_blank" rel="noopener">API Keys Manager</a> in your Wix account and generate a new key.</li>
-      <li>Give it access to the <b>Aqua Lux Aruba</b> site and permission to manage your site’s CMS / data collections.</li>
-      <li>Copy the key, paste it here and press Connect.</li>
-    </ol>
-    <div class="ai-key-row">
-      <input type="password" id="wix-key" autocomplete="off" spellcheck="false" placeholder="Wix API key">
-      <button class="btn btn-primary" id="wix-save">Connect</button>
-    </div>
-    <span class="send-status" id="wix-status"></span>`;
-
-  const status = $('#wix-status');
-  const run = async (label, fn) => {
-    status.classList.remove('err');
-    status.textContent = label;
-    try { status.textContent = await fn(); }
-    catch (err) { status.classList.add('err'); status.textContent = err.message; }
-  };
-  $('#wix-save')?.addEventListener('click', () => run('Connecting…', async () => {
-    await api('/wix/key', { method: 'POST', body: JSON.stringify({ key: $('#wix-key').value }) });
-    try {
-      const t = await api('/wix/test', { method: 'POST' });
-      const r = await api('/wix/publish', { method: 'POST', body: '{}' });
-      await renderWixPanel();
-      $('#wix-status').textContent = `Connected ✓ — ${r.saved} service${r.saved === 1 ? '' : 's'} sent to the website (it had ${t.items}).`;
-      return $('#wix-status').textContent;
-    } catch (err) {
-      await api('/wix/key', { method: 'DELETE' });
-      throw err;
-    }
-  }));
-  $('#wix-test')?.addEventListener('click', () => run('Testing…', async () => {
-    const t = await api('/wix/test', { method: 'POST' });
-    return `Working ✓ — the website has ${t.items} service${t.items === 1 ? '' : 's'}.`;
-  }));
-  $('#wix-publish-all')?.addEventListener('click', () => run('Sending…', async () => {
-    const r = await api('/wix/publish', { method: 'POST', body: '{}' });
-    return `Sent ✓ — ${r.saved} service${r.saved === 1 ? '' : 's'} updated${r.removed ? `, ${r.removed} hidden` : ''}.`;
-  }));
-  $('#wix-remove')?.addEventListener('click', async () => {
-    if (!confirm('Disconnect the website? Changes in the CRM stop going to aqualuxaruba.com until you connect again.')) return;
-    await api('/wix/key', { method: 'DELETE' });
-    renderWixPanel();
-  });
-}
-
 async function loadSettings() {
   renderAiPanel();
-  renderWixPanel();
   const s = await api('/gmail/status');
   gmailStatus = s;
   updateGmailDot();
