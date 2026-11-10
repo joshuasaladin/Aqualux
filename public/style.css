@@ -625,43 +625,6 @@ main.wide { max-width: 1750px; }
 .ai-key-row { display: flex; gap: 8px; margin-bottom: 6px; }
 .ai-key-row input { flex: 1; min-width: 0; }
 
-/* ============================================== website set-up guide === */
-.guide-btn { margin-top: 12px; }
-.guide-modal { width: min(820px, 100%); position: relative; padding: 30px 32px; }
-.guide-close {
-  position: absolute; top: 14px; right: 14px; width: 36px; height: 36px; border-radius: 50%;
-  border: 1px solid var(--border); background: #fff; font-size: 1.3rem; line-height: 1; cursor: pointer; color: var(--muted);
-}
-.guide-title { font-family: var(--serif); font-size: 1.9rem; margin: 0 40px 8px 0; line-height: 1.1; }
-.guide-intro { color: #3c4b59; font-size: .92rem; margin-bottom: 18px; line-height: 1.5; }
-#guide-content { counter-reset: guidestep; }
-.guide-check span::before { counter-increment: guidestep; content: counter(guidestep) ". "; color: var(--aqua-dark); }
-.guide-step { border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; margin-bottom: 12px; background: #fff; }
-.guide-step.is-done { background: #f3fbf6; border-color: #bfe3cf; }
-.guide-step.is-done .guide-body { opacity: .65; }
-.guide-check { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--navy); cursor: pointer; font-size: 1rem; }
-.guide-check input { width: auto; transform: scale(1.25); accent-color: var(--green); }
-.guide-check small { margin-left: auto; font-weight: 600; color: var(--muted); font-size: .76rem; white-space: nowrap; }
-.guide-body { margin: 8px 0 0 30px; font-size: .9rem; line-height: 1.55; color: #24333f; }
-.guide-body ol { margin: 6px 0 8px 18px; }
-.guide-body li { margin-bottom: 4px; }
-.guide-body p { margin: 6px 0; }
-.guide-body code { background: #eef2f5; border-radius: 5px; padding: 1px 6px; font-size: .84rem; }
-.guide-note { color: #7a5c1c; background: var(--gold-soft); border-radius: 8px; padding: 6px 10px; font-size: .84rem; }
-.guide-ok { color: var(--green); font-weight: 650; margin-left: 6px; }
-.guide-todo { color: var(--amber); font-weight: 650; margin-left: 6px; }
-.guide-table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: .85rem; }
-.guide-table th { text-align: left; color: var(--muted); font-size: .74rem; text-transform: uppercase; letter-spacing: .4px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
-.guide-table td { padding: 6px 8px; border-bottom: 1px solid #eef2f5; vertical-align: top; overflow-wrap: anywhere; }
-.guide-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
-.guide-chips span { background: var(--aqua-soft); color: var(--aqua-dark); border-radius: 999px; padding: 3px 10px; font-size: .8rem; font-weight: 600; }
-.guide-outro { margin-top: 14px; font-size: .9rem; color: #11663f; font-weight: 600; }
-@media (max-width: 640px) {
-  .guide-modal { padding: 22px 16px; }
-  .guide-title { font-size: 1.5rem; }
-  .guide-body { margin-left: 0; }
-}
-
 /* ============================================================ toast ===== */
 .toast {
   position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 20px); z-index: 80;
