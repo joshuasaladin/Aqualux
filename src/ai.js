@@ -159,13 +159,7 @@ export function servicesKnowledge() {
     add('How we book it (internal)', s.booking_method);
     add('Internal notes (for the team, never quote to guests)', s.internal_notes);
     const o = opts.filter((x) => x.service_id === s.id);
-    if (o.length) {
-      lines.push('Our prices (use these when quoting):');
-      for (const x of o) {
-        lines.push(optionLine(x));
-        if (String(x.web_details || '').trim()) lines.push(`    Includes: ${String(x.web_details).trim().split('\n').join('; ')}`);
-      }
-    }
+    if (o.length) lines.push('Our prices (use these when quoting):', ...o.map(optionLine));
     // our public page can be behind; the information above wins
     if (s.website_text) lines.push(`Our public website page (background only — it can be out of date; where it differs from the information above, the information above is correct, and never quote its prices):\n${clip(s.website_text, 2500)}`);
     if (s.provider_text) lines.push(`Provider website (checked ${String(s.checked_at || '').slice(0, 10)}):\n${clip(s.provider_text, 2500)}`);

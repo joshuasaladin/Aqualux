@@ -8,8 +8,6 @@
 import { db, getSetting } from './db.js';
 
 export const COLLECTION_ID = 'AquaLuxServices';
-// one item per price option (tour), shown as cards a visitor can open
-export const TOURS_ID = 'AquaLuxTours';
 const DEFAULT_SITE_ID = 'c2d8c937-e2c1-44d2-a0e7-ecb20cf357f2'; // aqualuxaruba.com
 const API = process.env.WIX_API_BASE || 'https://www.wixapis.com/data/v2';
 
@@ -125,34 +123,6 @@ export function toWixItem(s, order = 0) {
   };
 }
 
-// One tour (price option) of a service.
-export function toWixTour(s, o, order = 0) {
-  const details = listHtml(o.web_details);
-  const note = o.notes && o.notes.trim().toLowerCase() !== priceText(o).toLowerCase() ? `<p>${esc(o.notes)}</p>` : '';
-  return {
-    id: `${slugFor(s)}--${o.id}`,
-    data: {
-      title: o.option_name || 'Option',
-      serviceSlug: slugFor(s),
-      serviceName: s.service_name || '',
-      priceLine: priceText(o) + (Number(o.child_price) ? ` · child ${money(o.child_price)}` : ''),
-      times: o.timing || '',
-      details: details + note,
-      order
-    }
-  };
-}
-
-export const TOUR_FIELDS = [
-  ['title', 'Tour', 'TEXT'],
-  ['serviceSlug', 'Service page address', 'TEXT'],
-  ['serviceName', 'Service', 'TEXT'],
-  ['priceLine', 'Price', 'TEXT'],
-  ['times', 'Times', 'TEXT'],
-  ['details', 'Details', 'RICH_TEXT'],
-  ['order', 'Order', 'NUMBER']
-];
-
 // The collection's fields — used once, to create it (see createCollection).
 export const COLLECTION_FIELDS = [
   ['title', 'Service name', 'TEXT'],
@@ -212,7 +182,6 @@ export async function publish(ids = null) {
       removed++;
       markPublished([s]);
     }
-    await publishTours(show, list);
   } catch (err) {
     markPublished(ids ? list : [], err.message);
     throw err;
@@ -220,44 +189,12 @@ export async function publish(ids = null) {
   return { saved, removed };
 }
 
-export async function removeItem(itemId, collection = COLLECTION_ID) {
+export async function removeItem(itemId) {
   try {
-    await call('DELETE', `/items/${encodeURIComponent(itemId)}?dataCollectionId=${collection}`);
+    await call('DELETE', `/items/${encodeURIComponent(itemId)}?dataCollectionId=${COLLECTION_ID}`);
   } catch (err) {
     if (err.status !== 404) throw err; // already gone is fine
   }
-}
-
-// The tours of the given services: saved, and any tour that no longer exists
-// (or whose service is hidden) removed from the website.
-async function publishTours(show, all) {
-  const wanted = [];
-  for (const s of show) s.options.forEach((o, i) => wanted.push(toWixTour(s, o, i)));
-  for (let i = 0; i < wanted.length; i += 50) {
-    const r = await call('POST', '/bulk/items/save', { dataCollectionId: TOURS_ID, dataItems: wanted.slice(i, i + 50) });
-    const failed = (r.results || []).filter((x) => x.itemMetadata && x.itemMetadata.success === false);
-    if (failed.length) throw new Error(`Wix (tours): ${failed[0].itemMetadata.error?.description || 'a tour could not be saved'}`);
-  }
-  const slugs = new Set(all.map(slugFor));
-  const keep = new Set(wanted.map((w) => w.id));
-  const stale = [];
-  for (let offset = 0; offset < 2000; offset += 100) {
-    const r = await call('POST', '/items/query', { dataCollectionId: TOURS_ID, query: { paging: { limit: 100, offset } } });
-    const items = r.dataItems || [];
-    for (const it of items) {
-      if (slugs.has(it.data?.serviceSlug) && !keep.has(it.id)) stale.push(it.id);
-    }
-    if (items.length < 100) break;
-  }
-  for (let i = 0; i < stale.length; i += 50) {
-    await call('POST', '/bulk/items/remove', { dataCollectionId: TOURS_ID, dataItemIds: stale.slice(i, i + 50) });
-  }
-}
-
-// A deleted service: its page and its tours leave the website.
-export async function removeService(s) {
-  await removeItem(slugFor(s));
-  await publishTours([], [s]);
 }
 
 export async function testConnection() {

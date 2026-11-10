@@ -754,13 +754,13 @@ function saveOptions(serviceId, options) {
   const upd = db.prepare(`
     UPDATE service_options SET option_name = ?, price = ?, price_unit = ?, child_price = ?,
       min_people = ?, max_people = ?, downpayment_percent = ?, downpayment_fixed = ?,
-      downpayment_per_person = ?, timing = ?, notes = ?, sort_order = ?, web_details = ?
+      downpayment_per_person = ?, timing = ?, notes = ?, sort_order = ?
     WHERE id = ? AND service_id = ?`);
   const ins = db.prepare(`
     INSERT INTO service_options (option_name, price, price_unit, child_price,
       min_people, max_people, downpayment_percent, downpayment_fixed, downpayment_per_person,
-      timing, notes, sort_order, web_details, service_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      timing, notes, sort_order, service_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   options.forEach((o, i) => {
     if (!o) return;
     const vals = [String(o.option_name || '').slice(0, 200),
@@ -768,8 +768,7 @@ function saveOptions(serviceId, options) {
       Number(o.child_price) || 0,
       o.min_people ? parseInt(o.min_people, 10) : null, o.max_people ? parseInt(o.max_people, 10) : null,
       Number(o.downpayment_percent) || 0, Number(o.downpayment_fixed) || 0, o.downpayment_per_person ? 1 : 0,
-      String(o.timing || '').slice(0, 200), String(o.notes || '').slice(0, 1000), i,
-      String(o.web_details ?? '').slice(0, 4000)];
+      String(o.timing || '').slice(0, 200), String(o.notes || '').slice(0, 1000), i];
     const oid = Number(o.id);
     if (oid && existing.has(oid)) {
       upd.run(...vals, oid, serviceId);
@@ -854,7 +853,7 @@ app.delete('/api/services/:id', (req, res) => {
   const svc = db.prepare(`SELECT * FROM services WHERE id = ?`).get(req.params.id);
   if (svc) rememberDeleted(svc.service_name);
   if (svc && wix.wixConnected()) {
-    wix.removeService(svc).catch((err) => console.error(`[wix] remove ${svc.service_name}: ${err.message}`));
+    wix.removeItem(wix.slugFor(svc)).catch((err) => console.error(`[wix] remove ${svc.service_name}: ${err.message}`));
   }
   db.prepare(`DELETE FROM services WHERE id = ?`).run(req.params.id);
   res.json({ ok: true });
@@ -964,11 +963,11 @@ app.post('/api/services/:id/undo', (req, res) => {
   db.prepare(`DELETE FROM service_options WHERE service_id = ?`).run(req.params.id);
   const ins = db.prepare(`
     INSERT INTO service_options (id, service_id, option_name, price, price_unit, child_price, min_people, max_people,
-      downpayment_percent, downpayment_fixed, downpayment_per_person, timing, notes, sort_order, web_details)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      downpayment_percent, downpayment_fixed, downpayment_per_person, timing, notes, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
   for (const o of snap.options || []) {
     ins.run(o.id, req.params.id, o.option_name, o.price, o.price_unit, o.child_price, o.min_people, o.max_people,
-      o.downpayment_percent, o.downpayment_fixed, o.downpayment_per_person, o.timing, o.notes, o.sort_order, o.web_details || '');
+      o.downpayment_percent, o.downpayment_fixed, o.downpayment_per_person, o.timing, o.notes, o.sort_order);
   }
   wix.schedulePublish(req.params.id);
   res.json(getServiceFull(req.params.id));
@@ -1299,46 +1298,6 @@ function importWebsiteCatalog() {
   return { ok: !errors.length, filled, created, errors };
 }
 
-// One time: lines in "What's included" that are about one tour ("Morning:
-// 3 snorkel stops, BBQ…") move into that tour's "Details for the website".
-function splitList(t) {
-  const out = []; let depth = 0, cur = '';
-  for (const ch of String(t)) {
-    if (ch === '(') depth++;
-    if (ch === ')') depth = Math.max(0, depth - 1);
-    if ((ch === ',' || ch === ';') && depth === 0) { if (cur.trim()) out.push(cur.trim()); cur = ''; } else cur += ch;
-  }
-  if (cur.trim()) out.push(cur.trim());
-  return out.map((x) => x.replace(/^(and|plus)\s+/i, '')).map((x) => x.charAt(0).toUpperCase() + x.slice(1));
-}
-function moveTourDetails() {
-  const words = (n) => String(n || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ')
-    .filter((w) => w && !['tour', 'tours', 'cruise', 'the', 'a', 'and', 'with'].includes(w));
-  let moved = 0;
-  for (const svc of db.prepare(`SELECT id, included FROM services`).all()) {
-    const opts = db.prepare(`SELECT id, option_name, web_details FROM service_options WHERE service_id = ?`).all(svc.id);
-    if (!opts.length) continue;
-    const keep = [];
-    for (const line of String(svc.included || '').split('\n')) {
-      const m = line.match(/^\s*([^:]{2,40}):\s*(.+)$/);
-      if (!m) { keep.push(line); continue; }
-      const lw = words(m[1]);
-      // the option whose name matches the label best (all label words in it, fewest extra words)
-      const cands = opts.filter((o) => lw.length && lw.every((w) => words(o.option_name).includes(w)))
-        .sort((a, b) => words(a.option_name).length - words(b.option_name).length);
-      const o = cands[0];
-      if (!o || String(o.web_details || '').trim()) { keep.push(line); continue; }
-      o.web_details = splitList(m[2]).join('\n');
-      db.prepare(`UPDATE service_options SET web_details = ? WHERE id = ?`).run(o.web_details, o.id);
-      moved++;
-    }
-    const rest = keep.join('\n').replace(/\n{2,}/g, '\n').trim();
-    if (rest !== String(svc.included || '').trim()) db.prepare(`UPDATE services SET included = ? WHERE id = ?`).run(rest, svc.id);
-  }
-  if (moved) console.log(`Moved ${moved} tour description(s) into their price options.`);
-  return moved;
-}
-
 if (!getSetting('website_only_v1', false)) {
   switchToWebsite();
   setSetting('website_only_v1', true);
@@ -1395,13 +1354,6 @@ app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
   res.status(500).json({ error: `Server error: ${err.message || err}` });
 });
-
-// After the website switch (so a new install gets it too).
-if (!getSetting('option_details_v1', false)) {
-  moveTourDetails();
-  setSetting('option_details_v1', true);
-  if (wix.wixConnected()) wix.publish().catch((err) => console.error('[wix] publish after tour details:', err.message));
-}
 
 gmail.startPolling();
 

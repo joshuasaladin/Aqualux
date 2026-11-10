@@ -318,8 +318,6 @@ for (const [col, def] of [
   ['wix_published_at', 'wix_published_at TEXT'],
   ['wix_error', `wix_error TEXT DEFAULT ''`]
 ]) ensureColumn('services', col, def);
-// What a price option (one tour) includes, shown when a visitor opens it on the website
-ensureColumn('service_options', 'web_details', `web_details TEXT DEFAULT ''`);
 ensureColumn('leads', 'gcal_sig', 'gcal_sig TEXT');
 // Each booked service is confirmed on its own; a lead counts as confirmed
 // when any of its services is. Start time also lives on the service now.

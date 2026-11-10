@@ -655,12 +655,6 @@ main.wide { max-width: 1750px; }
 .guide-table td { padding: 6px 8px; border-bottom: 1px solid #eef2f5; vertical-align: top; overflow-wrap: anywhere; }
 .guide-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
 .guide-chips span { background: var(--aqua-soft); color: var(--aqua-dark); border-radius: 999px; padding: 3px 10px; font-size: .8rem; font-weight: 600; }
-.guide-code { position: relative; margin-top: 10px; }
-.guide-code pre {
-  background: #0d1b2a; color: #d7e6f2; border-radius: 10px; padding: 14px 16px; font-size: .78rem; line-height: 1.5;
-  overflow-x: auto; white-space: pre; max-height: 360px;
-}
-.guide-code .btn { position: absolute; top: 8px; right: 8px; }
 .guide-outro { margin-top: 14px; font-size: .9rem; color: #11663f; font-weight: 600; }
 @media (max-width: 640px) {
   .guide-modal { padding: 22px 16px; }
@@ -802,8 +796,6 @@ main.wide { max-width: 1750px; }
 .opt-field { display: block; font-size: .7rem; font-weight: 600; color: var(--muted); margin-bottom: 8px; }
 .opt-row-line2 .opt-field, .opt-row-line3 .opt-field { margin-bottom: 0; }
 .opt-field input, .opt-field select { margin-top: 3px; padding: 7px 9px; font-size: .86rem; font-weight: 400; }
-.opt-hint { font-weight: 400; color: #8a98a6; }
-.opt-web { margin-top: 3px; padding: 7px 9px; font-size: .86rem; font-weight: 400; line-height: 1.45; resize: vertical; overflow: hidden; }
 .opt-field.opt-check { display: flex; align-items: center; gap: 6px; padding-bottom: 9px; }
 .opt-field.opt-check input { width: auto; margin: 0; accent-color: var(--aqua); }
 
