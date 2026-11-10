@@ -1299,6 +1299,27 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: `Server error: ${err.message || err}` });
 });
 
+// One time: an earlier version moved tour lines out of "What's included"
+// into per-tour website boxes (service_options.web_details). That feature is
+// gone, so put those lines back where they were ("Morning Tour: …").
+{
+  const hasWeb = db.prepare(`PRAGMA table_info(service_options)`).all().some((c) => c.name === 'web_details');
+  if (hasWeb) {
+    let restored = 0;
+    for (const o of db.prepare(`SELECT id, service_id, option_name, web_details FROM service_options WHERE web_details != ''`).all()) {
+      const line = `${o.option_name}: ${o.web_details.split('\n').map((x) => x.trim()).filter(Boolean).join(', ')}`;
+      const svc = db.prepare(`SELECT included FROM services WHERE id = ?`).get(o.service_id);
+      if (svc && !String(svc.included || '').includes(line)) {
+        db.prepare(`UPDATE services SET included = ? WHERE id = ?`)
+          .run([String(svc.included || '').trim(), line].filter(Boolean).join('\n'), o.service_id);
+      }
+      db.prepare(`UPDATE service_options SET web_details = '' WHERE id = ?`).run(o.id);
+      restored++;
+    }
+    if (restored) console.log(`Put ${restored} tour description(s) back into "What's included".`);
+  }
+}
+
 gmail.startPolling();
 
 app.listen(PORT, () => {
