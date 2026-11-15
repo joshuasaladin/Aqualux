@@ -155,6 +155,7 @@ export function servicesKnowledge() {
     add('Location', s.location);
     add('Good to know', s.good_to_know);
     add('Cancellation policy', s.cancellation_policy);
+    add('Invoice notes / payment policy', s.invoice_notes);
     add('Information we need from the guest to book', s.info_needed);
     add('How we book it (internal)', s.booking_method);
     add('Internal notes (for the team, never quote to guests)', s.internal_notes);
@@ -314,6 +315,63 @@ export async function draftReply(leadId, { instructions = '', currentDraft = '' 
   const body = finalText(resp);
   if (!body) throw new AiError('Claude returned an empty reply. Try again.', 502);
   return { markdown: body };
+}
+
+// ------------------------------------------------------------- invoices ----
+const INVOICE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['bill_name', 'bill_address', 'lines', 'notes'],
+  properties: {
+    bill_name: { type: 'string', description: 'Who the invoice is for (the guest\'s full name).' },
+    bill_address: { type: 'string', description: 'Where they are staying / their address, if mentioned; otherwise empty.' },
+    lines: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['description', 'date', 'people', 'downpayment', 'balance'],
+        properties: {
+          description: { type: 'string', description: 'The service as it should read on the invoice, e.g. "Swedish Massage (60 min)" or "Airport transportation (Round trip)".' },
+          date: { type: 'string', description: 'Date of the service as YYYY-MM-DD, or empty if not agreed yet.' },
+          people: { type: 'string', description: 'Number of people (or vehicles etc.), as text; empty if unknown.' },
+          downpayment: { type: 'number', description: 'Downpayment due to us now for this line, in USD.' },
+          balance: { type: 'number', description: 'Remaining balance for this line (total minus downpayment), in USD.' }
+        }
+      }
+    },
+    notes: { type: 'array', items: { type: 'string' }, description: 'Extra notes agreed in the conversation that belong on this invoice (special arrangements). Do not repeat standard policies; empty if none.' }
+  }
+};
+
+// Reads the lead (what we filled in, and the whole conversation) and works
+// out what the invoice should list.
+export async function invoiceFromConversation(leadId) {
+  const { lead, text } = leadContext(leadId);
+  const prompt = `You prepare invoices for Aqua Lux Aruba, a concierge company in Aruba.
+
+Work out what this guest's invoice should list, from what the team filled in on the lead and from the conversation: every service the guest has agreed to or asked us to book, one line per service (several services go on the same invoice).
+
+Rules:
+- "Services on this booking" (filled in by the team) is the most reliable; add services that were clearly agreed in the conversation but aren't listed there yet. Leave out services the guest declined or only asked about.
+- Prices: use a price agreed in the conversation or filled in on the lead; otherwise calculate it from "Our prices" in the services information (price × people, hours, days… as the price unit says). Never use the public website prices.
+- Downpayment: use the deposit rule of that service's price option (a percentage of the line total, or a fixed amount, per person if it says so). If the service has no deposit rule, the downpayment is 0 and the whole amount is the remaining balance.
+- balance = line total − downpayment.
+- If something needed for a price is unknown (for example the number of people), make the best line you can and put 0 where you can't know.
+
+<services_information>
+${servicesKnowledge()}
+</services_information>
+
+${text}`;
+  const resp = await run({
+    max_tokens: 16000,
+    output_config: { effort: 'medium', format: { type: 'json_schema', schema: INVOICE_SCHEMA } },
+    messages: [{ role: 'user', content: prompt }]
+  }, `invoice lead ${lead.id}`);
+  const data = parseJson(finalText(resp));
+  if (!data) throw new AiError('Could not read Claude’s answer. Try again.', 502);
+  return data;
 }
 
 // --------------------------------------------------------- website check ----

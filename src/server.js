@@ -7,6 +7,7 @@ import { db, dataDir, touchLead, upsertClient, setSetting, getSetting, markThrea
 import * as gmail from './gmail.js';
 import { WEBSITE_CATALOG } from './website-catalog.js';
 import * as ai from './ai.js';
+import * as inv from './invoices.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -737,7 +738,8 @@ function parseSuggestions(v) {
 const SERVICE_TEXT_FIELDS = [
   'category', 'wix_form_name', 'service_name', 'company', 'contact', 'booking_method',
   'info_needed', 'commission', 'internal_notes', 'website_url', 'page_url', 'image_url',
-  'summary', 'included', 'duration', 'location', 'good_to_know', 'cancellation_policy', 'website_prices'
+  'summary', 'included', 'duration', 'location', 'good_to_know', 'cancellation_policy', 'website_prices',
+  'invoice_notes'
 ];
 
 // Saves a service's price options in the order given. Existing options are
@@ -975,6 +977,113 @@ app.post('/api/services/:id/site-issues/:iid/done', (req, res) => {
   const left = svc.site_issues.filter((i) => req.params.iid !== 'all' && i.id !== req.params.iid);
   db.prepare(`UPDATE services SET site_issues = ? WHERE id = ?`).run(JSON.stringify(left), svc.id);
   res.json(getServiceFull(svc.id));
+});
+
+// ------------------------------------------------------------- invoices --
+app.get('/api/invoices', (req, res) => {
+  const rows = db.prepare(`
+    SELECT i.id FROM invoices i ${req.query.lead ? 'WHERE i.lead_id = ?' : ''}
+    ORDER BY i.created_at DESC, i.id DESC`).all(...(req.query.lead ? [req.query.lead] : []));
+  res.json(rows.map((r) => inv.getInvoice(r.id)));
+});
+
+app.get('/api/invoice-settings', (req, res) => res.json(inv.invoiceSettings()));
+
+app.put('/api/invoice-settings', (req, res) => {
+  const b = req.body || {};
+  if (Array.isArray(b.payable)) {
+    setSetting('invoice_payable', b.payable
+      .map((p) => ({ method: String(p.method || '').trim().slice(0, 60), detail: String(p.detail || '').trim().slice(0, 300) }))
+      .filter((p) => p.method || p.detail));
+  }
+  if (b.default_notes !== undefined) setSetting('invoice_default_notes', String(b.default_notes).slice(0, 2000));
+  if (b.logo === null) setSetting('invoice_logo', null);
+  else if (b.logo?.data) {
+    if (!/^image\/(png|jpe?g)$/i.test(b.logo.mimeType || '')) return res.status(400).json({ error: 'The logo must be a PNG or JPG image.' });
+    setSetting('invoice_logo', { data: b.logo.data, mimeType: b.logo.mimeType });
+  }
+  res.json(inv.invoiceSettings());
+});
+
+// New invoice: from a lead (its booking lines and service policies) or blank.
+app.post('/api/invoices', (req, res) => {
+  const leadId = Number(req.body?.lead_id) || null;
+  const draft = leadId ? inv.draftFromLead(leadId) : { bill_name: '', lines: [] };
+  if (!draft) return res.status(404).json({ error: 'Lead not found' });
+  res.status(201).json(inv.createInvoice(draft));
+});
+
+app.get('/api/invoices/:id', (req, res) => {
+  const i = inv.getInvoice(req.params.id);
+  if (!i) return res.status(404).json({ error: 'Not found' });
+  res.json(i);
+});
+
+app.patch('/api/invoices/:id', (req, res) => {
+  const cur = inv.getInvoice(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  const b = req.body || {};
+  const sets = [], params = [];
+  for (const f of ['bill_name', 'bill_address', 'notes', 'number']) {
+    if (b[f] !== undefined) { sets.push(`${f} = ?`); params.push(String(b[f]).slice(0, 3000)); }
+  }
+  if (b.issue_date !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(b.issue_date)) { sets.push('issue_date = ?'); params.push(b.issue_date); }
+  if (b.lines !== undefined) {
+    const lines = inv.cleanLines(b.lines);
+    sets.push('lines = ?'); params.push(JSON.stringify(lines));
+    const before = b.notes !== undefined ? String(b.notes).slice(0, 3000) : cur.notes;
+    const notes = inv.notesWithNewServices(cur.lines, lines, before);
+    if (notes !== before) { sets.push('notes = ?'); params.push(notes); }
+  }
+  if (sets.length) {
+    db.prepare(`UPDATE invoices SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = ?`).run(...params, req.params.id);
+  }
+  res.json(inv.getInvoice(req.params.id));
+});
+
+app.delete('/api/invoices/:id', (req, res) => {
+  db.prepare(`DELETE FROM invoices WHERE id = ?`).run(req.params.id);
+  res.json({ ok: true });
+});
+
+// Refill from the lead: its booking lines again, or (ai) the whole conversation.
+app.post('/api/invoices/:id/refill', async (req, res) => {
+  const cur = inv.getInvoice(req.params.id);
+  if (!cur) return res.status(404).json({ error: 'Not found' });
+  if (!cur.lead_id) return res.status(400).json({ error: 'This invoice isn’t linked to a lead.' });
+  try {
+    let d;
+    if (req.body?.ai) {
+      const r = await ai.invoiceFromConversation(cur.lead_id);
+      const lines = inv.cleanLines(r.lines);
+      const extra = (r.notes || []).map((x) => String(x).trim()).filter(Boolean);
+      const base = inv.notesFor(lines.map((l) => l.description)).split('\n');
+      for (const n of extra) if (!base.some((x) => x.toLowerCase() === n.toLowerCase())) base.push(n);
+      d = { bill_name: r.bill_name || cur.bill_name, bill_address: r.bill_address || cur.bill_address, lines, notes: base.join('\n') };
+    } else {
+      d = inv.draftFromLead(cur.lead_id);
+    }
+    db.prepare(`UPDATE invoices SET bill_name = ?, bill_address = ?, lines = ?, notes = ?, updated_at = datetime('now') WHERE id = ?`)
+      .run(d.bill_name || '', d.bill_address || '', JSON.stringify(d.lines), d.notes || '', cur.id);
+    res.json(inv.getInvoice(cur.id));
+  } catch (err) {
+    const e = ai.friendlyError(err);
+    res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+// The PDF: as a download, or (?json=1) as base64 to attach to a reply.
+app.get('/api/invoices/:id/pdf', async (req, res, next) => {
+  try {
+    const i = inv.getInvoice(req.params.id);
+    if (!i) return res.status(404).json({ error: 'Not found' });
+    const pdf = await inv.invoicePdf(i);
+    const filename = `Invoice ${i.number}${i.bill_name ? ` - ${i.bill_name.replace(/[^\w .-]+/g, '')}` : ''}.pdf`;
+    if (req.query.json) return res.json({ filename, mimeType: 'application/pdf', size: pdf.length, data: pdf.toString('base64') });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+    res.send(pdf);
+  } catch (err) { next(err); }
 });
 
 // ---------------------------------------------------------- AI assistant --

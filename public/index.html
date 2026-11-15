@@ -36,6 +36,7 @@
       <button class="nav-btn active" data-view="leads">Leads</button>
       <button class="nav-btn" data-view="bookings">Bookings</button>
       <button class="nav-btn" data-view="calendar">Calendar</button>
+      <button class="nav-btn" data-view="invoices">Invoices</button>
       <button class="nav-btn" data-view="payments">Payments</button>
       <button class="nav-btn" data-view="services">Services</button>
       <div class="nav-dropdown" id="other-dropdown">
@@ -119,6 +120,18 @@
       <p class="cal-hint">Shows bookings that are marked <b>Confirmed</b> and have a service date. Tap a day to see that day on a timeline — and open any booking from there.</p>
     </section>
 
+    <!-- ============================ INVOICES ============================= -->
+    <section id="view-invoices" class="view hidden">
+      <div class="page-head">
+        <div>
+          <h1 class="page-title">Invoices</h1>
+          <p class="page-sub">Create an invoice from a lead (the 🧾 Invoice button in its reply box) or start a blank one here.</p>
+        </div>
+        <div class="page-actions"><button class="btn btn-primary" id="btn-new-invoice">+ New invoice</button></div>
+      </div>
+      <div id="invoice-list" class="card-list"></div>
+    </section>
+
     <!-- ============================ PAYMENTS ============================= -->
     <section id="view-payments" class="view hidden">
       <div class="stat-grid" id="pay-stats"></div>
@@ -164,6 +177,8 @@
     <section id="view-settings" class="view hidden">
       <h2>AI assistant</h2>
       <div class="panel" id="ai-panel"></div>
+      <h2>Invoices</h2>
+      <div class="panel" id="invoice-settings-panel"></div>
       <h2>Gmail connection</h2>
       <div class="panel" id="gmail-panel"></div>
       <h2>Email signature</h2>
@@ -294,6 +309,11 @@
     </form>
   </div>
 </div>
+<!-- Invoice editor -->
+<div id="invoice-backdrop" class="modal-backdrop hidden">
+  <div class="modal invoice-modal"><div id="invoice-content"></div></div>
+</div>
+
 <!-- Full-size view of a photo someone emailed. -->
 <div id="lightbox" class="lightbox hidden">
   <div class="lightbox-bar">

@@ -313,6 +313,25 @@ for (const [col, def] of [
   ['site_issues', `site_issues TEXT DEFAULT '[]'`],
   ['site_checked_at', 'site_checked_at TEXT']
 ]) ensureColumn('services', col, def);
+// What goes in the Notes of an invoice for this service (its policies), one per line
+ensureColumn('services', 'invoice_notes', `invoice_notes TEXT DEFAULT ''`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS invoices (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id      INTEGER REFERENCES leads(id) ON DELETE SET NULL,
+    client_id    INTEGER REFERENCES clients(id) ON DELETE SET NULL,
+    number       TEXT NOT NULL DEFAULT '',
+    bill_name    TEXT NOT NULL DEFAULT '',
+    bill_address TEXT NOT NULL DEFAULT '',
+    issue_date   TEXT NOT NULL DEFAULT (date('now', '-4 hours')),
+    lines        TEXT NOT NULL DEFAULT '[]',
+    notes        TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_invoices_lead ON invoices(lead_id);
+`);
 ensureColumn('leads', 'gcal_sig', 'gcal_sig TEXT');
 // Each booked service is confirmed on its own; a lead counts as confirmed
 // when any of its services is. Start time also lives on the service now.

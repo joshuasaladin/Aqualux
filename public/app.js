@@ -348,6 +348,7 @@ function showView(name) {
   if (name === 'bookings') loadBookings();
   if (name === 'calendar') renderCalendar();
   if (name === 'payments') loadPayments();
+  if (name === 'invoices') loadInvoices();
   if (name === 'clients') loadClients();
   if (name === 'services') loadServices();
   if (name === 'settings') loadSettings();
@@ -1030,7 +1031,8 @@ const SVC_BOOKING_FIELDS = [
   ['booking_method', 'How we book it', 1, 'booking-method-list'],
   ['info_needed', 'What we need from the guest to book', 2],
   ['commission', 'Our commission', 1],
-  ['internal_notes', 'Internal notes', 3]
+  ['internal_notes', 'Internal notes', 3],
+  ['invoice_notes', 'Invoice notes for this service (payment and cancellation policy, one per line)', 3]
 ];
 const SVC_PAGE_FIELDS = [
   ['service_name', 'Service name', 1],
@@ -1413,6 +1415,236 @@ function toast(msg, kind = '') {
   toast.t = setTimeout(() => el.classList.remove('show'), kind === 'err' ? 7000 : 4500);
 }
 
+/* ----------------------------------------------------------- invoices --- */
+const usd2 = (n) => '$' + (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+async function loadInvoices() {
+  const rows = await api('/invoices');
+  $('#invoice-list').innerHTML = rows.length ? rows.map((i) => `
+    <div class="card" data-invoice="${i.id}">
+      <div class="card-top">
+        <span class="card-title">${esc(i.bill_name || i.client_name || 'No name yet')}</span>
+        <span class="badge bk-no">No. ${esc(i.number)}</span>
+        <span class="card-right"><span class="card-amount">${usd2(i.totals.total)}
+          <span class="card-comm">(${usd2(i.totals.downpayment)} downpayment)</span></span></span>
+      </div>
+      <div class="card-sub">${i.lines.map((l) => esc(l.description)).join(' · ') || 'No services yet'} · made ${esc(timeAgo(i.created_at))}</div>
+    </div>`).join('') : '<div class="empty">No invoices yet.</div>';
+  $('#invoice-list').querySelectorAll('[data-invoice]').forEach((el) =>
+    el.addEventListener('click', () => openInvoice(Number(el.dataset.invoice))));
+}
+$('#btn-new-invoice').addEventListener('click', async () => {
+  const invoice = await api('/invoices', { method: 'POST', body: '{}' });
+  openInvoice(invoice.id);
+});
+
+let invoiceFlush = null;
+async function closeInvoice() {
+  const flush = invoiceFlush; invoiceFlush = null;
+  if (flush) await flush();
+  $('#invoice-backdrop').classList.add('hidden');
+  if (currentView === 'invoices') loadInvoices();
+}
+$('#invoice-backdrop').addEventListener('click', (e) => { if (e.target === $('#invoice-backdrop')) closeInvoice(); });
+
+function invoiceLineRow(l = {}) {
+  return `
+  <div class="inv-line">
+    <label class="inv-f inv-desc">Description<input class="il-desc" value="${esc(l.description || '')}"></label>
+    <label class="inv-f">Date<input class="il-date" type="date" value="${esc(l.date || '')}"></label>
+    <label class="inv-f">People<input class="il-people" value="${esc(l.people || '')}"></label>
+    <label class="inv-f">Downpayment<input class="il-down" type="number" min="0" step="0.01" inputmode="decimal" value="${l.downpayment || ''}"></label>
+    <label class="inv-f">Remaining balance<input class="il-bal" type="number" min="0" step="0.01" inputmode="decimal" value="${l.balance || ''}"></label>
+    <div class="inv-f inv-total">Total<span class="il-total"></span></div>
+    <button type="button" class="opt-del il-del" title="Remove this line" aria-label="Remove line">×</button>
+  </div>`;
+}
+
+// opts.attach(file): given when opened from a lead's reply box
+async function openInvoice(id, opts = {}) {
+  let inv = await api('/invoices/' + id);
+  const box = $('#invoice-content');
+  box.innerHTML = `
+    <div class="inv-head">
+      <h2>Invoice <span class="inv-no">No. ${esc(inv.number)}</span></h2>
+      <span class="send-status" id="inv-status"></span>
+      <button class="guide-close inv-close" id="inv-close" aria-label="Close">×</button>
+    </div>
+    <div class="form-row">
+      <label>Invoice for<input id="inv-name" value="${esc(inv.bill_name)}"></label>
+      <label>Address / where they stay<input id="inv-address" value="${esc(inv.bill_address)}"></label>
+    </div>
+    <div class="form-row">
+      <label>Invoice date<input id="inv-date" type="date" value="${esc(String(inv.issue_date).slice(0, 10))}"></label>
+      <div class="inv-refill">${inv.lead_id ? `
+        <button class="btn btn-sm" id="inv-from-lead" title="Use the services filled in on the lead">↻ Fill from the lead</button>
+        <button class="btn btn-sm btn-ai" id="inv-from-ai" title="Read the conversation and the lead and work out the invoice">✨ Fill from the conversation</button>` : ''}
+      </div>
+    </div>
+    <h3 class="inv-h">Services</h3>
+    <div id="inv-lines"></div>
+    <button class="btn btn-sm" id="inv-add">+ Add a service</button>
+    <div class="inv-bottom">
+      <label class="inv-notes">Notes and policies <span class="opt-hint">— one per line. They come from each service’s invoice notes; change them for this invoice here.</span>
+        <textarea id="inv-notes" rows="5">${esc(inv.notes)}</textarea></label>
+      <div class="inv-sums">
+        <div><span>Downpayment</span><b id="inv-s-down"></b></div>
+        <div><span>Remaining balance</span><b id="inv-s-bal"></b></div>
+        <div class="inv-s-total"><span>Total</span><b id="inv-s-total"></b></div>
+      </div>
+    </div>
+    <div class="inv-actions">
+      ${opts.attach ? '<button class="btn btn-primary" id="inv-attach">📎 Attach to the reply</button>' : ''}
+      <button class="btn" id="inv-pdf">View PDF</button>
+      <button class="btn btn-danger" id="inv-delete">Delete invoice</button>
+    </div>`;
+  $('#invoice-backdrop').classList.remove('hidden');
+
+  const status = $('#inv-status');
+  const linesEl = $('#inv-lines');
+  const readLines = () => [...linesEl.querySelectorAll('.inv-line')].map((r) => ({
+    description: r.querySelector('.il-desc').value, date: r.querySelector('.il-date').value,
+    people: r.querySelector('.il-people').value, downpayment: Number(r.querySelector('.il-down').value) || 0,
+    balance: Number(r.querySelector('.il-bal').value) || 0
+  }));
+  function sums() {
+    let d = 0, b = 0;
+    linesEl.querySelectorAll('.inv-line').forEach((r) => {
+      const dn = Number(r.querySelector('.il-down').value) || 0, bl = Number(r.querySelector('.il-bal').value) || 0;
+      r.querySelector('.il-total').textContent = usd2(dn + bl);
+      d += dn; b += bl;
+    });
+    $('#inv-s-down').textContent = usd2(d); $('#inv-s-bal').textContent = usd2(b); $('#inv-s-total').textContent = usd2(d + b);
+  }
+  function fill(i) {
+    inv = i;
+    $('#inv-name').value = i.bill_name; $('#inv-address').value = i.bill_address; $('#inv-notes').value = i.notes;
+    linesEl.innerHTML = i.lines.map(invoiceLineRow).join('');
+    sums();
+  }
+  fill(inv);
+
+  let timer = null, dirty = false, saving = Promise.resolve();
+  function saveNow() {
+    clearTimeout(timer);
+    if (!dirty) return saving;
+    dirty = false;
+    const body = { bill_name: $('#inv-name').value, bill_address: $('#inv-address').value, notes: $('#inv-notes').value,
+      issue_date: $('#inv-date').value, lines: readLines() };
+    status.classList.remove('err'); status.textContent = 'Saving…';
+    saving = saving.then(() => api('/invoices/' + id, { method: 'PATCH', body: JSON.stringify(body) }))
+      .then((i) => {
+        inv = i; status.textContent = 'Saved ✓';
+        // a newly added service brings its own policy lines
+        const notes = $('#inv-notes');
+        if (notes && i.notes !== body.notes && notes.value === body.notes) notes.value = i.notes;
+      })
+      .catch((err) => { dirty = true; status.classList.add('err'); status.textContent = 'Not saved — ' + err.message; });
+    return saving;
+  }
+  invoiceFlush = saveNow;
+  const touch = () => { dirty = true; sums(); clearTimeout(timer); timer = setTimeout(saveNow, 600); };
+  box.addEventListener('input', touch);
+  linesEl.addEventListener('click', (e) => {
+    if (!e.target.closest('.il-del')) return;
+    e.target.closest('.inv-line').remove(); touch();
+  });
+  $('#inv-add').addEventListener('click', () => {
+    linesEl.insertAdjacentHTML('beforeend', invoiceLineRow({}));
+    linesEl.lastElementChild.querySelector('.il-desc').focus(); sums();
+  });
+  $('#inv-close').addEventListener('click', closeInvoice);
+
+  async function refill(ai, btn) {
+    if (readLines().length && !confirm('Replace the services and notes on this invoice?')) return;
+    await saveNow();
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = ai ? 'Reading the conversation…' : 'Filling…';
+    status.classList.remove('err'); status.textContent = '';
+    try {
+      fill(await api(`/invoices/${id}/refill`, { method: 'POST', body: JSON.stringify({ ai }) }));
+      status.textContent = ai ? '✨ Filled from the conversation — check the amounts.' : 'Filled from the lead ✓';
+    } catch (err) { status.classList.add('err'); status.textContent = err.message; }
+    btn.disabled = false; btn.textContent = label;
+  }
+  $('#inv-from-lead')?.addEventListener('click', (e) => refill(false, e.currentTarget));
+  $('#inv-from-ai')?.addEventListener('click', (e) => refill(true, e.currentTarget));
+
+  $('#inv-pdf').addEventListener('click', async () => {
+    const win = window.open('', '_blank'); // opened right away so phones don't block it
+    await saveNow();
+    const res = await fetch(`/api/invoices/${id}/pdf`, { headers: token ? { Authorization: 'Bearer ' + token } : {} });
+    if (!res.ok) { win?.close(); toast('Could not make the PDF.', 'err'); return; }
+    const url = URL.createObjectURL(await res.blob());
+    if (win) win.location = url; else location.href = url;
+  });
+  $('#inv-attach')?.addEventListener('click', async () => {
+    await saveNow();
+    try {
+      opts.attach(await api(`/invoices/${id}/pdf?json=1`));
+      await closeInvoice();
+      toast('Invoice attached to your reply.');
+    } catch (err) { toast(err.message, 'err'); }
+  });
+  $('#inv-delete').addEventListener('click', async () => {
+    if (!confirm('Delete this invoice?')) return;
+    invoiceFlush = null;
+    await api('/invoices/' + id, { method: 'DELETE' });
+    closeInvoice();
+  });
+}
+
+async function renderInvoiceSettings() {
+  const panel = $('#invoice-settings-panel');
+  const st = await api('/invoice-settings');
+  const row = (p = {}) => `
+    <div class="pay-row">
+      <input class="pay-method" value="${esc(p.method || '')}" placeholder="Method">
+      <textarea class="pay-detail" rows="1" placeholder="Details (one per line)">${esc(p.detail || '')}</textarea>
+      <button type="button" class="opt-del pay-del" aria-label="Remove">×</button>
+    </div>`;
+  panel.innerHTML = `
+    <p class="reply-hint" style="margin-bottom:8px"><b>Payable to</b> — the payment options printed on every invoice.</p>
+    <div id="pay-rows">${st.payable.map(row).join('')}</div>
+    <button class="btn btn-sm" id="pay-add">+ Add payment option</button>
+    <p class="reply-hint" style="margin:16px 0 8px"><b>Notes on every invoice</b> — one per line. Each service adds its own policy lines (set them on the service’s page under Booking &amp; provider).</p>
+    <textarea id="inv-default-notes" rows="3">${esc(st.default_notes)}</textarea>
+    <p class="reply-hint" style="margin:16px 0 8px"><b>Logo</b> — shown at the top right of the invoice (PNG or JPG).</p>
+    <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+      <input type="file" id="inv-logo-file" accept="image/png,image/jpeg" hidden>
+      <button class="btn btn-sm" id="inv-logo-upload">🖼️ ${st.logo ? 'Replace logo' : 'Upload logo'}</button>
+      ${st.logo ? '<button class="btn btn-sm btn-danger" id="inv-logo-remove">Remove logo</button><span class="reply-hint">Logo uploaded ✓</span>' : ''}
+      <span class="send-status" id="inv-set-status"></span>
+    </div>`;
+  const status = $('#inv-set-status');
+  let timer;
+  const save = async (extra = {}) => {
+    const payable = [...panel.querySelectorAll('.pay-row')].map((r) => ({ method: r.querySelector('.pay-method').value, detail: r.querySelector('.pay-detail').value }));
+    try {
+      await api('/invoice-settings', { method: 'PUT', body: JSON.stringify({ payable, default_notes: $('#inv-default-notes').value, ...extra }) });
+      status.classList.remove('err'); status.textContent = 'Saved ✓';
+    } catch (err) { status.classList.add('err'); status.textContent = err.message; }
+  };
+  panel.addEventListener('input', (e) => {
+    if (e.target.type === 'file') return;
+    clearTimeout(timer); timer = setTimeout(() => save(), 700);
+  });
+  panel.addEventListener('click', (e) => {
+    if (!e.target.closest('.pay-del')) return;
+    e.target.closest('.pay-row').remove(); save();
+  });
+  $('#pay-add').addEventListener('click', () => $('#pay-rows').insertAdjacentHTML('beforeend', row()));
+  $('#inv-logo-upload').addEventListener('click', () => $('#inv-logo-file').click());
+  $('#inv-logo-file').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const r = new FileReader();
+    r.onload = async () => { await save({ logo: { data: r.result.split(',')[1], mimeType: file.type } }); renderInvoiceSettings(); };
+    r.readAsDataURL(file);
+  });
+  $('#inv-logo-remove')?.addEventListener('click', async () => { await save({ logo: null }); renderInvoiceSettings(); });
+}
+
 /* ------------------------------------------------------------ clients --- */
 async function loadClients() {
   const q = $('#client-search').value;
@@ -1691,6 +1923,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   // close the top-most layer only
   if (!$('#lightbox').classList.contains('hidden')) $('#lightbox').classList.add('hidden');
+  else if (!$('#invoice-backdrop').classList.contains('hidden')) closeInvoice();
   else if (!$('#day-backdrop').classList.contains('hidden')) closeDayView();
   else if (!$('#drawer').classList.contains('hidden')) closeDrawer();
   else if (!$('#svc-drawer').classList.contains('hidden')) closeServicePage();
@@ -1771,6 +2004,7 @@ async function openLead(id) {
         <div class="reply-actions">
           <button class="btn btn-primary" id="d-send" ${canEmail ? '' : 'disabled'}>Send reply ✉️</button>
           <button class="btn" id="d-attach" ${canEmail ? '' : 'disabled'} title="Attach files">📎 Attach</button>
+          <button class="btn" id="d-invoice" title="Create an invoice for this lead and attach it">🧾 Invoice</button>
           <select id="d-template" class="template-pick" ${canEmail ? '' : 'disabled'} title="Insert a saved reply">
             <option value="">${templates.length ? '📝 Templates…' : '📝 Templates (add in Settings)'}</option>
             ${templates.map((t, i) => `<option value="${i}">${esc(t.name)}</option>`).join('')}
@@ -2195,6 +2429,20 @@ async function openLead(id) {
     renderFileList();
   });
 
+  // --- invoice: made from this lead's booking lines, attached as a PDF ---
+  $('#d-invoice').addEventListener('click', async () => {
+    if (pendingLeadSave) await pendingLeadSave();
+    const existing = await api('/invoices?lead=' + id);
+    const invoice = existing[0] || await api('/invoices', { method: 'POST', body: JSON.stringify({ lead_id: id }) });
+    openInvoice(invoice.id, canEmail ? {
+      attach: (file) => {
+        pendingFiles = pendingFiles.filter((f) => !/^Invoice /.test(f.filename));
+        pendingFiles.push(file);
+        renderFileList();
+      }
+    } : {});
+  });
+
   $('#d-send').addEventListener('click', async () => {
     const body = replyText();
     if (!body && !pendingFiles.length) return;
@@ -2363,6 +2611,7 @@ async function renderAiPanel() {
 
 async function loadSettings() {
   renderAiPanel();
+  renderInvoiceSettings();
   const s = await api('/gmail/status');
   gmailStatus = s;
   updateGmailDot();
