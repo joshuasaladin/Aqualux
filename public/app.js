@@ -1030,10 +1030,14 @@ const SVC_BOOKING_FIELDS = [
   ['contact', 'Provider contact', 1],
   ['booking_method', 'How we book it', 1, 'booking-method-list'],
   ['info_needed', 'What we need from the guest to book', 2],
-  ['commission', 'Our commission', 1],
-  ['internal_notes', 'Internal notes', 3],
-  ['invoice_notes', 'Invoice notes for this service (payment and cancellation policy, one per line)', 3]
+  ['commission', 'Our commission', 1]
 ];
+const SVC_INVOICE_FIELDS = [
+  ['invoice_description', 'Description on the invoice (leave empty to use the service name)', 1],
+  ['invoice_fields', 'Details to fill in on the invoice — one per line', 3],
+  ['invoice_notes', 'Policies printed in the invoice notes — one per line', 3]
+];
+const SVC_NOTE_FIELDS = [['internal_notes', 'Notes about this service (only the team sees these)', 5]];
 const SVC_PAGE_FIELDS = [
   ['service_name', 'Service name', 1],
   ['category', 'Category', 1, 'category-list'],
@@ -1169,10 +1173,22 @@ async function openService(id) {
     <div id="svc-issues"></div>
 
     <div class="svc-cols">
-      <div class="panel">
-        <h3>About this service</h3>
-        <p class="reply-hint svc-hint">What guests should know. The AI uses this when it writes replies.</p>
-        ${SVC_INFO_FIELDS.map((f) => svcField(f, s)).join('')}
+      <div>
+        <div class="panel">
+          <h3>About this service</h3>
+          <p class="reply-hint svc-hint">What guests should know. The AI uses this when it writes replies.</p>
+          ${SVC_INFO_FIELDS.map((f) => svcField(f, s)).join('')}
+        </div>
+        <div class="panel">
+          <h3>🧾 Invoice settings</h3>
+          <p class="reply-hint svc-hint">Used when this service is put on an invoice: its description, the details you fill in for it
+            (each line here becomes a box on the invoice), and its policies. The downpayment comes from “Deposit” in Prices.</p>
+          ${SVC_INVOICE_FIELDS.map((f) => svcField(f, s)).join('')}
+        </div>
+        <div class="panel">
+          <h3>Notes <span class="internal-tag">internal</span></h3>
+          ${SVC_NOTE_FIELDS.map((f) => svcField(f, s)).join('')}
+        </div>
       </div>
       <div>
         <div class="panel">
@@ -1447,22 +1463,79 @@ async function closeInvoice() {
 }
 $('#invoice-backdrop').addEventListener('click', (e) => { if (e.target === $('#invoice-backdrop')) closeInvoice(); });
 
+let invoiceServices = [];
+const invSvc = (id) => invoiceServices.find((x) => x.id === Number(id));
+function invoiceOptionChoices(svc) {
+  const opts = (svc?.options || []).filter((o) => o.price_unit !== 'quote' && Number(o.price) > 0);
+  if (!opts.length) return '';
+  return '<option value="">Choose a price…</option>' + opts.map((o) =>
+    `<option value="${o.id}">${esc(o.option_name || svc.service_name)} — ${money(o.price)} ${esc(PRICE_UNIT_LABELS[o.price_unit] || '')}</option>`).join('');
+}
+const invoiceDetailInputs = (details) => (details || []).map((d) =>
+  `<label class="inv-f">${esc(d.label)}<input class="il-detail" data-label="${esc(d.label)}" value="${esc(d.value || '')}"></label>`).join('');
+
 function invoiceLineRow(l = {}) {
+  const svc = invSvc(l.service_id);
+  const cats = [...new Set(invoiceServices.map((x) => x.category || 'Other'))];
+  const optChoices = invoiceOptionChoices(svc);
   return `
   <div class="inv-line">
-    <label class="inv-f inv-desc">Description<input class="il-desc" value="${esc(l.description || '')}"></label>
-    <label class="inv-f">Date<input class="il-date" type="date" value="${esc(l.date || '')}"></label>
-    <label class="inv-f">People<input class="il-people" value="${esc(l.people || '')}"></label>
-    <label class="inv-f">Downpayment<input class="il-down" type="number" min="0" step="0.01" inputmode="decimal" value="${l.downpayment || ''}"></label>
-    <label class="inv-f">Remaining balance<input class="il-bal" type="number" min="0" step="0.01" inputmode="decimal" value="${l.balance || ''}"></label>
-    <div class="inv-f inv-total">Total<span class="il-total"></span></div>
-    <button type="button" class="opt-del il-del" title="Remove this line" aria-label="Remove line">×</button>
+    <div class="inv-pick">
+      <label class="inv-f">Service<select class="il-svc">
+        <option value="">Other (type it yourself)</option>
+        ${cats.map((c) => `<optgroup label="${esc(c)}">${invoiceServices.filter((x) => (x.category || 'Other') === c).map((x) =>
+          `<option value="${x.id}" ${svc?.id === x.id ? 'selected' : ''}>${esc(x.service_name)}</option>`).join('')}</optgroup>`).join('')}
+      </select></label>
+      <label class="inv-f il-opt-wrap ${optChoices ? '' : 'hidden'}">Price<select class="il-opt">${optChoices}</select></label>
+      <button type="button" class="opt-del il-del" title="Remove this service" aria-label="Remove service">×</button>
+    </div>
+    <div class="inv-grid">
+      <label class="inv-f inv-desc">Description<input class="il-desc" value="${esc(l.description || '')}"></label>
+      <label class="inv-f">Date<input class="il-date" type="date" value="${esc(l.date || '')}"></label>
+      <label class="inv-f">People<input class="il-people" value="${esc(l.people || '')}"></label>
+      <label class="inv-f">Downpayment<input class="il-down" type="number" min="0" step="0.01" inputmode="decimal" value="${l.downpayment || ''}"></label>
+      <label class="inv-f">Remaining balance<input class="il-bal" type="number" min="0" step="0.01" inputmode="decimal" value="${l.balance || ''}"></label>
+      <div class="inv-f inv-total">Total<span class="il-total"></span></div>
+    </div>
+    <div class="inv-details">${invoiceDetailInputs(l.details)}</div>
   </div>`;
+}
+
+// Picking a service fills the line with what that service's invoice needs.
+function invoicePickService(row) {
+  const svc = invSvc(row.querySelector('.il-svc').value);
+  const optSel = row.querySelector('.il-opt');
+  const choices = invoiceOptionChoices(svc);
+  optSel.innerHTML = choices;
+  row.querySelector('.il-opt-wrap').classList.toggle('hidden', !choices);
+  if (!svc) { row.querySelector('.inv-details').innerHTML = ''; return; }
+  row.querySelector('.il-desc').value = svc.invoice_description || svc.service_name;
+  const have = [...row.querySelectorAll('.il-detail')].map((i) => ({ label: i.dataset.label, value: i.value }));
+  const labels = String(svc.invoice_fields || '').split('\n').map((x) => x.trim()).filter(Boolean);
+  row.querySelector('.inv-details').innerHTML = invoiceDetailInputs(labels.map((label) =>
+    ({ label, value: have.find((d) => d.label.toLowerCase() === label.toLowerCase())?.value || '' })));
+  if (optSel.options.length === 2) { optSel.selectedIndex = 1; invoicePickOption(row); }
+}
+// Picking a price works out the total and the downpayment for the people filled in.
+function invoicePickOption(row) {
+  const svc = invSvc(row.querySelector('.il-svc').value);
+  const o = svc?.options.find((x) => x.id === Number(row.querySelector('.il-opt').value));
+  if (!o) return;
+  const people = Math.max(1, parseInt(row.querySelector('.il-people').value, 10) || 1);
+  const total = Number(o.price) * (o.price_unit === 'per_person' ? people : 1);
+  let dep = (o.downpayment_percent ? total * o.downpayment_percent / 100 : 0) +
+    (o.downpayment_fixed ? o.downpayment_fixed * (o.downpayment_per_person ? people : 1) : 0);
+  dep = Math.min(total, Math.round(dep * 100) / 100);
+  const base = svc.invoice_description || svc.service_name;
+  row.querySelector('.il-desc').value = o.option_name && !base.toLowerCase().includes(o.option_name.toLowerCase()) ? `${base} (${o.option_name})` : base;
+  row.querySelector('.il-down').value = dep || '';
+  row.querySelector('.il-bal').value = Math.round((total - dep) * 100) / 100 || '';
 }
 
 // opts.attach(file): given when opened from a lead's reply box
 async function openInvoice(id, opts = {}) {
-  let inv = await api('/invoices/' + id);
+  let inv;
+  [inv, invoiceServices] = await Promise.all([api('/invoices/' + id), api('/services')]);
   const box = $('#invoice-content');
   box.innerHTML = `
     <div class="inv-head">
@@ -1505,7 +1578,9 @@ async function openInvoice(id, opts = {}) {
   const readLines = () => [...linesEl.querySelectorAll('.inv-line')].map((r) => ({
     description: r.querySelector('.il-desc').value, date: r.querySelector('.il-date').value,
     people: r.querySelector('.il-people').value, downpayment: Number(r.querySelector('.il-down').value) || 0,
-    balance: Number(r.querySelector('.il-bal').value) || 0
+    balance: Number(r.querySelector('.il-bal').value) || 0,
+    service_id: Number(r.querySelector('.il-svc').value) || null,
+    details: [...r.querySelectorAll('.il-detail')].map((i) => ({ label: i.dataset.label, value: i.value }))
   }));
   function sums() {
     let d = 0, b = 0;
@@ -1523,6 +1598,7 @@ async function openInvoice(id, opts = {}) {
     sums();
   }
   fill(inv);
+  if (opts.message) status.textContent = opts.message;
 
   let timer = null, dirty = false, saving = Promise.resolve();
   function saveNow() {
@@ -1544,14 +1620,26 @@ async function openInvoice(id, opts = {}) {
   }
   invoiceFlush = saveNow;
   const touch = () => { dirty = true; sums(); clearTimeout(timer); timer = setTimeout(saveNow, 600); };
-  box.addEventListener('input', touch);
+  box.addEventListener('input', (e) => {
+    const row = e.target.closest('.inv-line');
+    if (row && e.target.classList.contains('il-people') && row.querySelector('.il-opt').value) invoicePickOption(row);
+    touch();
+  });
+  box.addEventListener('change', (e) => {
+    const row = e.target.closest('.inv-line');
+    if (!row) return;
+    if (e.target.classList.contains('il-svc')) invoicePickService(row);
+    else if (e.target.classList.contains('il-opt')) invoicePickOption(row);
+    else return;
+    touch();
+  });
   linesEl.addEventListener('click', (e) => {
     if (!e.target.closest('.il-del')) return;
     e.target.closest('.inv-line').remove(); touch();
   });
   $('#inv-add').addEventListener('click', () => {
     linesEl.insertAdjacentHTML('beforeend', invoiceLineRow({}));
-    linesEl.lastElementChild.querySelector('.il-desc').focus(); sums();
+    linesEl.lastElementChild.querySelector('.il-svc').focus(); sums();
   });
   $('#inv-close').addEventListener('click', closeInvoice);
 
@@ -1607,13 +1695,13 @@ async function renderInvoiceSettings() {
     <p class="reply-hint" style="margin-bottom:8px"><b>Payable to</b> — the payment options printed on every invoice.</p>
     <div id="pay-rows">${st.payable.map(row).join('')}</div>
     <button class="btn btn-sm" id="pay-add">+ Add payment option</button>
-    <p class="reply-hint" style="margin:16px 0 8px"><b>Notes on every invoice</b> — one per line. Each service adds its own policy lines (set them on the service’s page under Booking &amp; provider).</p>
+    <p class="reply-hint" style="margin:16px 0 8px"><b>Notes on every invoice</b> — one per line. Each service adds its own policy lines (set them on the service’s page under Invoice settings).</p>
     <textarea id="inv-default-notes" rows="3">${esc(st.default_notes)}</textarea>
-    <p class="reply-hint" style="margin:16px 0 8px"><b>Logo</b> — shown at the top right of the invoice (PNG or JPG).</p>
+    <p class="reply-hint" style="margin:16px 0 8px"><b>Logo</b> — the Aqua Lux logo is printed at the top right of the invoice. Upload another one here to use that instead (PNG or JPG).</p>
     <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
       <input type="file" id="inv-logo-file" accept="image/png,image/jpeg" hidden>
-      <button class="btn btn-sm" id="inv-logo-upload">🖼️ ${st.logo ? 'Replace logo' : 'Upload logo'}</button>
-      ${st.logo ? '<button class="btn btn-sm btn-danger" id="inv-logo-remove">Remove logo</button><span class="reply-hint">Logo uploaded ✓</span>' : ''}
+      <button class="btn btn-sm" id="inv-logo-upload">🖼️ ${st.logo ? 'Replace logo' : 'Use a different logo'}</button>
+      ${st.logo ? '<button class="btn btn-sm btn-danger" id="inv-logo-remove">Back to the Aqua Lux logo</button><span class="reply-hint">Your own logo is in use ✓</span>' : ''}
       <span class="send-status" id="inv-set-status"></span>
     </div>`;
   const status = $('#inv-set-status');
@@ -2004,7 +2092,7 @@ async function openLead(id) {
         <div class="reply-actions">
           <button class="btn btn-primary" id="d-send" ${canEmail ? '' : 'disabled'}>Send reply ✉️</button>
           <button class="btn" id="d-attach" ${canEmail ? '' : 'disabled'} title="Attach files">📎 Attach</button>
-          <button class="btn" id="d-invoice" title="Create an invoice for this lead and attach it">🧾 Invoice</button>
+          <button class="btn" id="d-invoice" title="Draft an invoice from what this guest asked for (AI reads the conversation), then attach it">🧾 Invoice</button>
           <select id="d-template" class="template-pick" ${canEmail ? '' : 'disabled'} title="Insert a saved reply">
             <option value="">${templates.length ? '📝 Templates…' : '📝 Templates (add in Settings)'}</option>
             ${templates.map((t, i) => `<option value="${i}">${esc(t.name)}</option>`).join('')}
@@ -2432,15 +2520,27 @@ async function openLead(id) {
   // --- invoice: made from this lead's booking lines, attached as a PDF ---
   $('#d-invoice').addEventListener('click', async () => {
     if (pendingLeadSave) await pendingLeadSave();
+    const btn = $('#d-invoice');
     const existing = await api('/invoices?lead=' + id);
-    const invoice = existing[0] || await api('/invoices', { method: 'POST', body: JSON.stringify({ lead_id: id }) });
+    let invoice = existing[0], message = '';
+    if (!invoice) {
+      // the AI reads what the guest asked for and drafts it; without AI, the lead's services are used
+      btn.disabled = true; btn.textContent = '✨ Reading the conversation…';
+      try {
+        invoice = await api('/invoices', { method: 'POST', body: JSON.stringify({ lead_id: id, ai: true }) });
+        message = invoice.drafted === 'ai' ? '✨ Drafted from the conversation — check the amounts.'
+          : `Made from the services on the lead${invoice.ai_error ? ' (AI: ' + invoice.ai_error + ')' : ''}.`;
+      } catch (err) { toast(err.message, 'err'); return; }
+      finally { btn.disabled = false; btn.textContent = '🧾 Invoice'; }
+    }
     openInvoice(invoice.id, canEmail ? {
+      message,
       attach: (file) => {
         pendingFiles = pendingFiles.filter((f) => !/^Invoice /.test(f.filename));
         pendingFiles.push(file);
         renderFileList();
       }
-    } : {});
+    } : { message });
   });
 
   $('#d-send').addEventListener('click', async () => {

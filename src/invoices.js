@@ -3,7 +3,12 @@
 // booking lines; each service's own invoice notes (policies) come along.
 // The PDF follows the invoice the team used to make in a spreadsheet.
 import PDFDocument from 'pdfkit';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { db, getSetting } from './db.js';
+
+const LOGO_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public', 'logo.png');
 
 export const DEFAULT_PAYABLE = [
   { method: 'Zelle', detail: 'aqualuxaruba@gmail.com' },
@@ -27,8 +32,13 @@ export function cleanLines(lines) {
     date: /^\d{4}-\d{2}-\d{2}$/.test(l.date || '') ? l.date : '',
     people: String(l.people ?? '').slice(0, 30),
     downpayment: num(l.downpayment),
-    balance: num(l.balance)
-  })).filter((l) => l.description || l.downpayment || l.balance);
+    balance: num(l.balance),
+    service_id: Number(l.service_id) || null,
+    // extra information this service needs on the invoice (set per service)
+    details: (Array.isArray(l.details) ? l.details : []).slice(0, 12)
+      .map((d) => ({ label: String(d?.label || '').trim().slice(0, 60), value: String(d?.value || '').trim().slice(0, 200) }))
+      .filter((d) => d.label)
+  })).filter((l) => l.description || l.downpayment || l.balance || l.service_id);
 }
 
 export function totals(lines) {
@@ -56,6 +66,18 @@ function serviceFor(name) {
     all.find((s) => n.includes(lc(s.service_name)) || (s.wix_form_name && n.includes(lc(s.wix_form_name)))) || null;
 }
 
+const serviceById = (id) => (id ? db.prepare(`SELECT * FROM services WHERE id = ?`).get(id) : null) || null;
+// The service an invoice line is about: the one picked, else by its description.
+const serviceOf = (line) => (typeof line === 'string' ? serviceFor(line) : serviceById(line?.service_id) || serviceFor(line?.description));
+const splitLines = (text) => String(text || '').split('\n').map((x) => x.trim()).filter(Boolean);
+// The details a service wants on its invoice line, keeping what is already filled in.
+export function detailsFor(service, have = []) {
+  const labels = splitLines(service?.invoice_fields);
+  const out = labels.map((label) => ({ label, value: have.find((d) => lc(d.label) === lc(label))?.value || '' }));
+  for (const d of have) if (d.value && !out.some((x) => lc(x.label) === lc(d.label))) out.push(d);
+  return out;
+}
+
 // How much of a price is the downpayment, from the service's price options.
 function depositFor(service, line, price, people) {
   if (!service || !price) return 0;
@@ -72,7 +94,7 @@ function depositFor(service, line, price, people) {
 
 // The notes for a set of invoice lines: the general notes first, then each
 // service's own policies (once each).
-export function notesFor(descriptions) {
+export function notesFor(lines) {
   const out = [];
   const add = (text) => {
     for (const l of String(text || '').split('\n').map((x) => x.trim()).filter(Boolean)) {
@@ -80,16 +102,16 @@ export function notesFor(descriptions) {
     }
   };
   add(getSetting('invoice_default_notes', DEFAULT_NOTES));
-  for (const d of descriptions) add(serviceFor(d)?.invoice_notes);
+  for (const l of lines) add(serviceOf(l)?.invoice_notes);
   return out.join('\n');
 }
 
 // When a service is newly added to an invoice by hand, its policy lines join the notes.
 export function notesWithNewServices(oldLines, newLines, notes) {
-  const had = new Set(oldLines.map((l) => serviceFor(l.description)?.id).filter(Boolean));
+  const had = new Set(oldLines.map((l) => serviceOf(l)?.id).filter(Boolean));
   const out = String(notes || '').split('\n');
   for (const l of newLines) {
-    const svc = serviceFor(l.description);
+    const svc = serviceOf(l);
     if (!svc || had.has(svc.id)) continue;
     had.add(svc.id);
     for (const n of String(svc.invoice_notes || '').split('\n').map((x) => x.trim()).filter(Boolean)) {
@@ -108,9 +130,13 @@ export function draftFromLead(leadId) {
   const lines = rows.map((r) => {
     const people = r.people || (lead.party_size ? String(lead.party_size) : '');
     const price = num(r.downpayment) + num(r.balance);
-    const dep = num(r.downpayment) || depositFor(serviceFor(r.name), r, price, people);
+    const svc = serviceFor(r.name);
+    const dep = num(r.downpayment) || depositFor(svc, r, price, people);
+    const label = svc?.invoice_description?.trim() || r.name;
     return {
-      description: r.info && !lc(r.name).includes(lc(r.info)) ? `${r.name} (${r.info})` : r.name,
+      service_id: svc?.id || null,
+      details: detailsFor(svc).map((d) => (/\btime\b/i.test(d.label) && r.service_time ? { ...d, value: r.service_time } : d)),
+      description: r.info && !lc(label).includes(lc(r.info)) ? `${label} (${r.info})` : label,
       date: r.service_date || lead.service_date || '',
       people,
       downpayment: dep,
@@ -127,6 +153,14 @@ export function draftFromLead(leadId) {
     lines: cleanLines(lines),
     notes: notesFor(rows.length ? rows.map((r) => r.name) : [lead.service])
   };
+}
+
+// Lines worked out by the AI: link each to its service and add that service's details.
+export function linkServices(lines) {
+  return (Array.isArray(lines) ? lines : []).map((l) => {
+    const svc = serviceFor(l.service_name) || serviceFor(l.description);
+    return { ...l, service_id: svc?.id || null, details: detailsFor(svc, Array.isArray(l.details) ? l.details : []) };
+  });
 }
 
 export function createInvoice(d) {
@@ -162,11 +196,12 @@ export function invoicePdf(inv) {
     doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(19).text('Aqua Lux Aruba', L, 34);
     doc.rect(0, 62, 612, 2.5).fill('#c9c9c9');
 
-    // logo (uploaded in Settings) or the name set in type
+    // logo: one uploaded in Settings, else the Aqua Lux logo that comes with the CRM
     const logo = getSetting('invoice_logo', null);
     let drewLogo = false;
-    if (logo?.data) {
-      try { doc.image(Buffer.from(logo.data, 'base64'), R - 120, 70, { fit: [120, 78], align: 'right' }); drewLogo = true; } catch { /* unreadable image */ }
+    for (const img of [logo?.data ? Buffer.from(logo.data, 'base64') : null, fs.existsSync(LOGO_FILE) ? LOGO_FILE : null]) {
+      if (!img || drewLogo) continue;
+      try { doc.image(img, R - 118, 60, { fit: [128, 104], align: 'right' }); drewLogo = true; } catch { /* unreadable image */ }
     }
     if (!drewLogo) {
       doc.fillColor(NAVY).font('Times-Roman').fontSize(20).text('AQUA LUX', R - 130, 92, { width: 130, align: 'center', characterSpacing: 1.5 });
@@ -209,10 +244,16 @@ export function invoicePdf(inv) {
     y += 22;
     doc.font('Helvetica').fontSize(9.5);
     inv.lines.forEach((l, i) => {
-      const h = Math.max(20, doc.heightOfString(l.description || ' ', { width: C.desc[1] }) + 9);
+      const extra = (l.details || []).filter((d) => d.value).map((d) => `${d.label}: ${d.value}`).join('\n');
+      doc.fontSize(9.5);
+      const dh = doc.heightOfString(l.description || ' ', { width: C.desc[1] });
+      doc.fontSize(8);
+      const eh = extra ? doc.heightOfString(extra, { width: C.desc[1] + 60 }) + 3 : 0;
+      const h = Math.max(20, dh + eh + 9);
       if (y + h > 700) { doc.addPage(); y = 50; }
       if (i % 2 === 0) doc.rect(L - 4, y, W + 8, h).fill(BAND);
-      doc.fillColor('#111'); cell(l.description, C.desc, y + 5);
+      if (extra) doc.fillColor(GREY).fontSize(8).text(extra, L, y + 5 + dh + 2, { width: C.desc[1] + 60 });
+      doc.fontSize(9.5).fillColor('#111'); cell(l.description, C.desc, y + 5);
       doc.fillColor(GREY);
       cell(fmtDate(l.date), C.date, y + 5); cell(l.people, C.people, y + 5, 'right');
       cell(l.downpayment ? usd(l.downpayment) : '-', C.down, y + 5, 'right');

@@ -53,6 +53,12 @@ h2 { font-size: 1.02rem; font-weight: 650; letter-spacing: -.01em; margin: 24px 
   color: #0a1a2b; background: linear-gradient(140deg, #f1dfae, #c5a059 60%, #a9853f);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), 0 2px 8px rgba(197, 160, 89, .35);
 }
+.brand-logo {
+  width: 44px; height: 44px; border-radius: 12px; background: #fff; object-fit: cover; flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .25);
+}
+.brand-login { justify-content: center; }
+.brand-login .brand-logo { width: 170px; height: 170px; border-radius: 0; box-shadow: none; background: none; }
 .brand-name { font-family: var(--serif); font-size: 1.5rem; font-weight: 700; letter-spacing: .4px; line-height: 1; }
 .brand-sub {
   color: var(--gold); font-weight: 600; font-size: .68rem; letter-spacing: 1.6px; text-transform: uppercase;
@@ -636,10 +642,13 @@ main.wide { max-width: 1750px; }
 }
 .inv-refill { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; padding-bottom: 10px; }
 .inv-h { font-size: .74rem; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 6px 0 8px; }
-.inv-line {
-  display: grid; grid-template-columns: minmax(0, 2.4fr) 1.3fr .8fr 1fr 1.1fr .9fr 30px; gap: 8px; align-items: end;
-  background: #f9fbfc; border: 1px solid var(--border); border-radius: 12px; padding: 8px 10px; margin-bottom: 8px;
-}
+.inv-line { background: #f9fbfc; border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; margin-bottom: 10px; }
+.inv-pick { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 30px; gap: 8px; align-items: end; margin-bottom: 8px; }
+.inv-pick .il-del { grid-column: 3; }
+.modal .inv-f select { margin-top: 3px; padding: 7px 9px; font-size: .86rem; width: 100%; }
+.inv-grid { display: grid; grid-template-columns: minmax(0, 2.4fr) 1.3fr .8fr 1fr 1.1fr .9fr; gap: 8px; align-items: end; }
+.inv-details { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.inv-details:not(:empty) { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); }
 .modal .inv-f { display: block; font-size: .7rem; font-weight: 600; color: var(--muted); margin: 0; }
 .modal .inv-f input { margin-top: 3px; padding: 7px 9px; font-size: .86rem; }
 .inv-total span { display: block; margin-top: 3px; padding: 8px 2px; font-size: .9rem; font-weight: 650; color: var(--navy); }
@@ -656,9 +665,12 @@ main.wide { max-width: 1750px; }
 .pay-row { display: grid; grid-template-columns: 200px minmax(0, 1fr) 30px; gap: 8px; margin-bottom: 8px; align-items: start; }
 .pay-row textarea { min-height: 40px; resize: vertical; line-height: 1.4; field-sizing: content; }
 @media (max-width: 720px) {
-  .inv-line { grid-template-columns: 1fr 1fr; }
-  .inv-line .inv-desc { grid-column: 1 / -1; }
-  .inv-line .il-del { justify-self: end; }
+  .inv-grid { grid-template-columns: 1fr 1fr; }
+  .inv-grid .inv-desc { grid-column: 1 / -1; }
+  .inv-pick { grid-template-columns: minmax(0, 1fr) 30px; }
+  .inv-pick .il-del { grid-column: 2; grid-row: 1; }
+  .inv-pick .il-opt-wrap { grid-column: 1; }
+  .inv-details { grid-template-columns: 1fr 1fr; }
   .inv-bottom { grid-template-columns: 1fr; }
   .inv-actions .btn { flex: 1 1 auto; }
   .inv-actions .btn-danger { margin-left: 0; }
@@ -965,6 +977,7 @@ main.wide { max-width: 1750px; }
   .topbar { padding: 10px 14px; }
   .brand-name { font-size: 1.35rem; }
   .brand-mark { width: 30px; height: 30px; font-size: .95rem; }
+  .brand-logo { width: 36px; height: 36px; border-radius: 10px; }
   .topbar nav .nav-btn { border-radius: 10px; }
   .svc-cols { grid-template-columns: 1fr; }
 }

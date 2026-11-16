@@ -739,7 +739,7 @@ const SERVICE_TEXT_FIELDS = [
   'category', 'wix_form_name', 'service_name', 'company', 'contact', 'booking_method',
   'info_needed', 'commission', 'internal_notes', 'website_url', 'page_url', 'image_url',
   'summary', 'included', 'duration', 'location', 'good_to_know', 'cancellation_policy', 'website_prices',
-  'invoice_notes'
+  'invoice_notes', 'invoice_description', 'invoice_fields'
 ];
 
 // Saves a service's price options in the order given. Existing options are
@@ -1006,11 +1006,29 @@ app.put('/api/invoice-settings', (req, res) => {
 });
 
 // New invoice: from a lead (its booking lines and service policies) or blank.
-app.post('/api/invoices', (req, res) => {
+// What the AI makes of the lead and its conversation, as invoice contents.
+async function aiInvoiceDraft(leadId, base) {
+  const r = await ai.invoiceFromConversation(leadId);
+  const lines = inv.cleanLines(inv.linkServices(r.lines));
+  const notes = inv.notesFor(lines).split('\n');
+  for (const n of (r.notes || []).map((x) => String(x).trim()).filter(Boolean)) {
+    if (!notes.some((x) => x.toLowerCase() === n.toLowerCase())) notes.push(n);
+  }
+  return { ...base, bill_name: r.bill_name || base.bill_name, bill_address: r.bill_address || base.bill_address, lines, notes: notes.join('\n') };
+}
+
+// New invoice: blank, from the lead's booking lines, or (ai) drafted by the AI
+// from the conversation — falling back to the booking lines if that fails.
+app.post('/api/invoices', async (req, res) => {
   const leadId = Number(req.body?.lead_id) || null;
-  const draft = leadId ? inv.draftFromLead(leadId) : { bill_name: '', lines: [] };
+  let draft = leadId ? inv.draftFromLead(leadId) : { bill_name: '', lines: [] };
   if (!draft) return res.status(404).json({ error: 'Lead not found' });
-  res.status(201).json(inv.createInvoice(draft));
+  let drafted = null, aiError = null;
+  if (leadId && req.body?.ai) {
+    try { draft = await aiInvoiceDraft(leadId, draft); drafted = 'ai'; }
+    catch (err) { aiError = ai.friendlyError(err).message; }
+  }
+  res.status(201).json({ ...inv.createInvoice(draft), drafted, ai_error: aiError });
 });
 
 app.get('/api/invoices/:id', (req, res) => {
@@ -1054,12 +1072,7 @@ app.post('/api/invoices/:id/refill', async (req, res) => {
   try {
     let d;
     if (req.body?.ai) {
-      const r = await ai.invoiceFromConversation(cur.lead_id);
-      const lines = inv.cleanLines(r.lines);
-      const extra = (r.notes || []).map((x) => String(x).trim()).filter(Boolean);
-      const base = inv.notesFor(lines.map((l) => l.description)).split('\n');
-      for (const n of extra) if (!base.some((x) => x.toLowerCase() === n.toLowerCase())) base.push(n);
-      d = { bill_name: r.bill_name || cur.bill_name, bill_address: r.bill_address || cur.bill_address, lines, notes: base.join('\n') };
+      d = await aiInvoiceDraft(cur.lead_id, { bill_name: cur.bill_name, bill_address: cur.bill_address });
     } else {
       d = inv.draftFromLead(cur.lead_id);
     }

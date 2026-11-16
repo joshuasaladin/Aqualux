@@ -315,6 +315,8 @@ for (const [col, def] of [
 ]) ensureColumn('services', col, def);
 // What goes in the Notes of an invoice for this service (its policies), one per line
 ensureColumn('services', 'invoice_notes', `invoice_notes TEXT DEFAULT ''`);
+ensureColumn('services', 'invoice_description', `invoice_description TEXT DEFAULT ''`);
+ensureColumn('services', 'invoice_fields', `invoice_fields TEXT DEFAULT ''`);
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS invoices (

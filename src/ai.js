@@ -156,6 +156,8 @@ export function servicesKnowledge() {
     add('Good to know', s.good_to_know);
     add('Cancellation policy', s.cancellation_policy);
     add('Invoice notes / payment policy', s.invoice_notes);
+    add('Description on the invoice', s.invoice_description);
+    add('Details to fill in on the invoice', String(s.invoice_fields || '').split('\n').map((x) => x.trim()).filter(Boolean).join('; '));
     add('Information we need from the guest to book', s.info_needed);
     add('How we book it (internal)', s.booking_method);
     add('Internal notes (for the team, never quote to guests)', s.internal_notes);
@@ -330,8 +332,15 @@ const INVOICE_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['description', 'date', 'people', 'downpayment', 'balance'],
+        required: ['service_name', 'description', 'date', 'people', 'downpayment', 'balance', 'details'],
         properties: {
+          service_name: { type: 'string', description: 'The exact name (the "## " heading) of the service in the services information this line is about; empty if it is none of them.' },
+          details: {
+            type: 'array',
+            description: 'The "Details to fill in on the invoice" of that service, each with the value found on the lead or in the conversation (empty value if unknown). Empty list if the service asks for none.',
+            items: { type: 'object', additionalProperties: false, required: ['label', 'value'],
+              properties: { label: { type: 'string' }, value: { type: 'string' } } }
+          },
           description: { type: 'string', description: 'The service as it should read on the invoice, e.g. "Swedish Massage (60 min)" or "Airport transportation (Round trip)".' },
           date: { type: 'string', description: 'Date of the service as YYYY-MM-DD, or empty if not agreed yet.' },
           people: { type: 'string', description: 'Number of people (or vehicles etc.), as text; empty if unknown.' },
@@ -357,6 +366,8 @@ Rules:
 - Prices: use a price agreed in the conversation or filled in on the lead; otherwise calculate it from "Our prices" in the services information (price × people, hours, days… as the price unit says). Never use the public website prices.
 - Downpayment: use the deposit rule of that service's price option (a percentage of the line total, or a fixed amount, per person if it says so). If the service has no deposit rule, the downpayment is 0 and the whole amount is the remaining balance.
 - balance = line total − downpayment.
+- Description: start from the service's "Description on the invoice" when it has one, and add the chosen option (for example "(Double ATV)").
+- Details: when the service lists "Details to fill in on the invoice", return every one of those labels exactly as written, with the value from the lead or the conversation (a pickup time, a hotel, a vehicle type…). Leave the value empty when it is not known — never guess.
 - If something needed for a price is unknown (for example the number of people), make the best line you can and put 0 where you can't know.
 
 <services_information>
