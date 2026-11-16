@@ -15,7 +15,7 @@ export const DEFAULT_PAYABLE = [
   { method: 'Venmo', detail: '@AquaLuxAruba' },
   { method: 'Bank Transfer Aruba', detail: 'Joshua Saladin\n3106380190\nAruba Bank' }
 ];
-export const DEFAULT_NOTES = 'Downpayment is required for reservation*\nRemaining balance needs to be paid to service provider';
+export const DEFAULT_NOTES = 'Down payment is required to secure the reservation.\nRemaining balance must be paid to the service provider.';
 
 export const invoiceSettings = () => ({
   payable: getSetting('invoice_payable', DEFAULT_PAYABLE),
@@ -175,113 +175,177 @@ export function createInvoice(d) {
 }
 
 // ----------------------------------------------------------------- PDF ----
-const NAVY = '#0c2f54', GREY = '#666666', BAND = '#f1f1f1', BOX = '#d9d9d9';
+// A4, navy and gold: header with the logo, a "bill to" card, the services
+// table, the payment options, the payment summary and the notes.
+const NAVY = '#0c2f54', BLUE = '#0b4a8a', GOLD = '#b8914f', GREY = '#6b7280', CARD = '#f3f6fa', RULE = '#dfe5ec';
 const usd = (n) => `$${num(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtDate = (iso) => {
   if (!iso) return '';
-  const [y, m, d] = iso.split('-').map(Number);
+  const [y, m, d] = iso.split('-');
   return `${m}/${d}/${y}`;
+};
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const longDate = (iso) => {
+  const [y, m, d] = String(iso || '').slice(0, 10).split('-').map(Number);
+  return y && m && d ? `${MONTHS[m - 1]} ${d}, ${y}` : '';
 };
 
 export function invoicePdf(inv) {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'LETTER', margin: 0, info: { Title: `Invoice ${inv.number}`, Author: 'Aqua Lux Aruba' } });
+    const doc = new PDFDocument({ size: 'A4', margin: 0, info: { Title: `Invoice ${inv.number}`, Author: 'Aqua Lux Aruba' } });
     const chunks = [];
     doc.on('data', (c) => chunks.push(c));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
     doc.on('error', reject);
 
-    const L = 48, R = 564, W = R - L;
-    doc.rect(0, 0, 612, 8).fill('#2b3990');
-    doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(19).text('Aqua Lux Aruba', L, 34);
-    doc.rect(0, 62, 612, 2.5).fill('#c9c9c9');
+    const L = 48, R = 547, W = R - L, PAGE_END = 758;
+    const B = 'Helvetica-Bold', N = 'Helvetica';
+    const footer = () => {
+      doc.moveTo(L, 769).lineTo(R, 769).lineWidth(0.6).strokeColor(RULE).stroke();
+      doc.font(B).fontSize(7.5).fillColor(NAVY).text('AQUA LUX ARUBA  |  CONCIERGE SERVICE', L, 782, { lineBreak: false, characterSpacing: 0.3 });
+      doc.font(N).fontSize(8).fillColor(BLUE).text('www.aqualuxaruba.com', L, 782, { width: W, align: 'right', lineBreak: false });
+    };
+    const topBand = () => { doc.rect(0, 0, 595.28, 9).fill(NAVY); doc.rect(0, 9, 595.28, 2.5).fill(GOLD); };
+    let y = 0;
+    // keeps a block together: starts a new page when it would run into the footer
+    const need = (h) => { if (y + h > PAGE_END) { footer(); doc.addPage(); topBand(); y = 48; } };
+    const heading = (text, x = L) => { doc.font(B).fontSize(10).fillColor(NAVY).text(text, x, y, { lineBreak: false, characterSpacing: 0.3 }); y += 21; };
 
+    // ---- header
+    topBand();
+    doc.font(B).fontSize(11).fillColor(NAVY).text('AQUA LUX ARUBA', L, 75, { characterSpacing: 0.4 });
+    doc.font(B).fontSize(35).text('INVOICE', L, 106, { characterSpacing: 0.5 });
+    doc.rect(L, 152, 37, 2.2).fill(GOLD);
+    doc.font(N).fontSize(9.5).fillColor(GREY).text(`Invoice no. ${inv.number}`, L, 169);
+    doc.text(`Issued ${longDate(inv.issue_date)}`, L, 185);
     // logo: one uploaded in Settings, else the Aqua Lux logo that comes with the CRM
-    const logo = getSetting('invoice_logo', null);
+    const custom = getSetting('invoice_logo', null);
     let drewLogo = false;
-    for (const img of [logo?.data ? Buffer.from(logo.data, 'base64') : null, fs.existsSync(LOGO_FILE) ? LOGO_FILE : null]) {
-      if (!img || drewLogo) continue;
-      try { doc.image(img, R - 118, 60, { fit: [128, 104], align: 'right' }); drewLogo = true; } catch { /* unreadable image */ }
+    if (custom?.data) {
+      try { doc.image(Buffer.from(custom.data, 'base64'), R - 150, 72, { fit: [150, 118], align: 'right', valign: 'center' }); drewLogo = true; } catch { /* unreadable image */ }
     }
-    if (!drewLogo) {
-      doc.fillColor(NAVY).font('Times-Roman').fontSize(20).text('AQUA LUX', R - 130, 92, { width: 130, align: 'center', characterSpacing: 1.5 });
-      doc.fillColor('#c5a059').font('Helvetica').fontSize(6).text('CONCIERGE SERVICE', R - 130, 116, { width: 130, align: 'center', characterSpacing: 1.2 });
+    if (!drewLogo && fs.existsSync(LOGO_FILE)) {
+      try { doc.image(LOGO_FILE, 383, 40, { width: 190 }); } catch { /* unreadable image */ }
     }
 
-    doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(34).text('Invoice', L, 84);
-    doc.fillColor(GREY).font('Helvetica').fontSize(9)
-      .text(`No. ${inv.number}  ·  ${fmtDate(String(inv.issue_date || '').slice(0, 10))}`, L, 124);
+    // ---- bill to / payment details
+    const payable = (getSetting('invoice_payable', DEFAULT_PAYABLE) || []).filter((p) => p.method || p.detail);
+    const mid = L + W / 2;
+    doc.font(N).fontSize(10);
+    const addrH = inv.bill_address ? doc.heightOfString(inv.bill_address, { width: mid - L - 40 }) : 0;
+    const cardH = Math.max(100, 76 + addrH);
+    y = 220;
+    doc.roundedRect(L, y, W, cardH, 8).fill(CARD);
+    doc.moveTo(mid, y + 23).lineTo(mid, y + cardH - 23).lineWidth(0.8).strokeColor('#d3dbe5').stroke();
+    doc.font(B).fontSize(8.5).fillColor(BLUE).text('BILL TO', L + 17, y + 20, { characterSpacing: 0.3 });
+    doc.font(B).fontSize(13).fillColor(NAVY).text(inv.bill_name || '', L + 17, y + 40, { width: mid - L - 40, lineBreak: false, ellipsis: true });
+    doc.font(N).fontSize(10).fillColor(GREY).text(inv.bill_address || '', L + 17, y + 62, { width: mid - L - 40 });
+    doc.font(B).fontSize(8.5).fillColor(BLUE).text('PAYMENT DETAILS', mid + 21, y + 20, { characterSpacing: 0.3 });
+    doc.font(N).fontSize(9.5).fillColor(NAVY).text(payable.map((p) => p.method).filter(Boolean).join('  /  '), mid + 21, y + 42, { width: W / 2 - 38 });
+    doc.fillColor(GREY).text('See payment methods below', mid + 21, doc.y + 8, { width: W / 2 - 38 });
+    y += cardH + 27;
 
-    // Invoice for / Payable to / Choose option
-    let y = 150;
-    const c2 = L + 178, c3 = L + 330;
-    doc.fillColor('#333').font('Helvetica-Bold').fontSize(11.5);
-    doc.text('Invoice for', L, y); doc.text('Payable to', c2, y); doc.text('Choose Option', c3, y);
-    y += 20;
-    doc.font('Helvetica').fontSize(9.5).fillColor(GREY);
-    doc.text(inv.bill_name || '', L, y + 4, { width: 165 });
-    const afterName = doc.y;
-    doc.text(inv.bill_address || '', L, afterName + 4, { width: 165 });
-    const leftEnd = doc.y;
-    let py = y;
-    const payable = getSetting('invoice_payable', DEFAULT_PAYABLE) || [];
-    payable.forEach((p, i) => {
-      const details = String(p.detail || '').split('\n').filter(Boolean);
-      const h = Math.max(1, details.length) * 18;
-      doc.rect(c3 - 4, py, 130, h).fill(i % 2 ? '#ececec' : BOX);
-      doc.fillColor(GREY).text(p.method || '', c2, py + 5, { width: 145 });
-      details.forEach((d, k) => doc.fillColor('#444').text(d, c3, py + 5 + k * 18, { width: 124, lineBreak: false }));
-      py += h;
-    });
-    y = Math.max(py, leftEnd) + 28;
-
-    // lines
-    const C = { desc: [L, 178], date: [L + 184, 58], people: [L + 242, 40], down: [L + 286, 76], bal: [L + 362, 96], total: [L + 458, 58] };
-    const cell = (text, [x, w], yy, align = 'left') => doc.text(text, x, yy, { width: w, align });
-    doc.fillColor(NAVY).font('Helvetica-Bold').fontSize(10);
-    cell('Description', C.desc, y); cell('Date', C.date, y); cell('People', C.people, y, 'right');
-    cell('Downpayment', C.down, y, 'right'); cell('Remaining Balance', C.bal, y, 'right'); cell('Total', C.total, y, 'right');
-    y += 22;
-    doc.font('Helvetica').fontSize(9.5);
-    inv.lines.forEach((l, i) => {
+    // ---- services
+    const C = { desc: [L + 13, 240], date: [L + 269, 60], guests: [L + 329, 45], total: [R - 113, 100] };
+    const tableHead = () => {
+      doc.roundedRect(L, y, W, 27, 5).fill(NAVY);
+      doc.font(B).fontSize(8).fillColor('#ffffff');
+      doc.text('DESCRIPTION', C.desc[0], y + 10, { lineBreak: false, characterSpacing: 0.3 });
+      doc.text('DATE', C.date[0], y + 10, { lineBreak: false, characterSpacing: 0.3 });
+      doc.text('GUESTS', C.guests[0], y + 10, { width: C.guests[1], align: 'center', lineBreak: false, characterSpacing: 0.3 });
+      doc.text('TOTAL', C.total[0], y + 10, { width: C.total[1], align: 'right', lineBreak: false, characterSpacing: 0.3 });
+      y += 27;
+    };
+    need(120);
+    heading('SERVICE DETAILS');
+    tableHead();
+    inv.lines.forEach((l) => {
       const extra = (l.details || []).filter((d) => d.value).map((d) => `${d.label}: ${d.value}`).join('\n');
-      doc.fontSize(9.5);
+      doc.font(N).fontSize(9.5);
       const dh = doc.heightOfString(l.description || ' ', { width: C.desc[1] });
       doc.fontSize(8);
-      const eh = extra ? doc.heightOfString(extra, { width: C.desc[1] + 60 }) + 3 : 0;
-      const h = Math.max(20, dh + eh + 9);
-      if (y + h > 700) { doc.addPage(); y = 50; }
-      if (i % 2 === 0) doc.rect(L - 4, y, W + 8, h).fill(BAND);
-      if (extra) doc.fillColor(GREY).fontSize(8).text(extra, L, y + 5 + dh + 2, { width: C.desc[1] + 60 });
-      doc.fontSize(9.5).fillColor('#111'); cell(l.description, C.desc, y + 5);
-      doc.fillColor(GREY);
-      cell(fmtDate(l.date), C.date, y + 5); cell(l.people, C.people, y + 5, 'right');
-      cell(l.downpayment ? usd(l.downpayment) : '-', C.down, y + 5, 'right');
-      cell(l.balance ? usd(l.balance) : '-', C.bal, y + 5, 'right');
-      cell(usd(l.downpayment + l.balance), C.total, y + 5, 'right');
+      const eh = extra ? doc.heightOfString(extra, { width: C.desc[1] }) + 4 : 0;
+      const pad = extra || dh > 14 ? 12 : 17;
+      const h = dh + eh + pad * 2;
+      if (y + h > PAGE_END) { footer(); doc.addPage(); topBand(); y = 48; tableHead(); }
+      doc.rect(L, y, W, h).fill(CARD);
+      for (const ly of [y, y + h]) doc.moveTo(L, ly).lineTo(R, ly).lineWidth(0.6).strokeColor(RULE).stroke();
+      const ty = y + pad;
+      doc.font(N).fontSize(9.5).fillColor(NAVY).text(l.description || '', C.desc[0], ty, { width: C.desc[1] });
+      if (extra) doc.fontSize(8).fillColor(GREY).text(extra, C.desc[0], ty + dh + 4, { width: C.desc[1] });
+      doc.font(N).fontSize(9.5).fillColor(NAVY);
+      doc.text(fmtDate(l.date), C.date[0], ty, { width: C.date[1], lineBreak: false });
+      doc.text(l.people || '', C.guests[0], ty, { width: C.guests[1], align: 'center', lineBreak: false });
+      doc.font(B).fontSize(10.5).text(usd(l.downpayment + l.balance), C.total[0], ty - 0.5, { width: C.total[1], align: 'right', lineBreak: false });
       y += h;
     });
-    y += 6;
-    doc.moveTo(L - 4, y).lineTo(R + 4, y).lineWidth(0.7).strokeColor('#bdbdbd').stroke();
-    y += 14;
+    y += 17;
 
-    // notes (left) and totals (right)
-    const t = totals(inv.lines);
-    let ty = y;
-    for (const [label, value, rule] of [['Downpayment', t.downpayment], ['Remaining balance', t.balance, true], ['Total', t.total]]) {
-      doc.fillColor(NAVY).font('Helvetica').fontSize(9.5).text(label, L + 300, ty, { width: 150, align: 'right' });
-      doc.fillColor('#111').font('Helvetica-Bold').text(usd(value), R - 90, ty, { width: 90, align: 'right' });
-      ty += 16;
-      if (rule) { doc.moveTo(L + 458, ty - 2).lineTo(R + 4, ty - 2).lineWidth(0.6).strokeColor('#8a8a8a').stroke(); ty += 3; }
+    // ---- payment options: two columns, filled top to bottom
+    if (payable.length) {
+      const blocks = payable.map((p) => ({ method: String(p.method || '').toUpperCase(), lines: String(p.detail || '').split('\n').map((x) => x.trim()).filter(Boolean) }));
+      const bh = (b) => 15 + Math.max(1, b.lines.length) * 16 + 6;
+      const colH = (c) => c.reduce((a, b) => a + bh(b), 0);
+      // split where the two columns come out most even
+      let k = 1;
+      for (let i = 1; i <= blocks.length; i++) {
+        const tall = (n) => Math.max(colH(blocks.slice(0, n)), colH(blocks.slice(n)));
+        if (tall(i) < tall(k)) k = i;
+      }
+      const cols = [blocks.slice(0, k), blocks.slice(k)];
+      const boxH = Math.max(colH(cols[0]), colH(cols[1])) - 6 + 28;
+      need(boxH + 40);
+      heading('PAYMENT OPTIONS');
+      doc.roundedRect(L, y, W, boxH, 8).fill(CARD);
+      if (cols[1].length) doc.moveTo(mid - 3, y + 15).lineTo(mid - 3, y + boxH - 15).lineWidth(0.8).strokeColor('#d3dbe5').stroke();
+      cols.forEach((col, ci) => {
+        const x = ci ? mid + 15 : L + 16;
+        let cy = y + 14;
+        for (const b of col) {
+          doc.font(B).fontSize(8).fillColor(BLUE).text(b.method, x, cy, { width: W / 2 - 34, lineBreak: false, characterSpacing: 0.3 });
+          cy += 15;
+          doc.font(N).fontSize(9.5).fillColor(NAVY);
+          for (const line of b.lines) { doc.text(line, x, cy, { width: W / 2 - 34, lineBreak: false, ellipsis: true }); cy += 16; }
+          if (!b.lines.length) cy += 16;
+          cy += 6;
+        }
+      });
+      y += boxH + 20;
     }
+
+    // ---- payment summary
+    const t = totals(inv.lines);
+    need(100);
+    heading('PAYMENT SUMMARY', L + 14);
+    const sx = L + 262;
+    y -= 4;
+    for (const [label, value] of [['Down payment', t.downpayment], ['Remaining balance', t.balance]]) {
+      doc.font(N).fontSize(9.5).fillColor(GREY).text(label, sx, y, { lineBreak: false });
+      doc.font(B).fontSize(10.5).fillColor(NAVY).text(usd(value), sx, y - 0.5, { width: R - 14 - sx, align: 'right', lineBreak: false });
+      y += 21;
+    }
+    doc.moveTo(sx, y - 3).lineTo(R - 14, y - 3).lineWidth(0.6).strokeColor(RULE).stroke();
+    y += 9;
+    doc.font(B).fontSize(10.5).fillColor(NAVY).text('TOTAL', sx, y + 3, { lineBreak: false });
+    doc.font(B).fontSize(16).fillColor(BLUE).text(usd(t.total), sx, y - 2, { width: R - 14 - sx, align: 'right', lineBreak: false });
+    y += 28;
+
+    // ---- notes
     const notes = String(inv.notes || '').split('\n').map((x) => x.trim()).filter(Boolean);
-    let ny = y;
-    doc.fillColor('#8a8a8a').font('Helvetica').fontSize(9.5).text('Notes:', L, ny);
-    notes.forEach((n, i) => {
-      doc.font(i === 0 ? 'Helvetica' : 'Helvetica-Bold').fillColor(i === 0 ? '#8a8a8a' : '#333')
-        .text(n, L + 48, ny, { width: 262 });
-      ny = doc.y + 5;
-    });
+    if (notes.length) {
+      doc.font(N).fontSize(9.5);
+      need(17 + Math.min(notes.length, 2) * 16);
+      doc.font(B).fontSize(9).fillColor(NAVY).text('BOOKING & PAYMENT NOTES', L, y, { lineBreak: false, characterSpacing: 0.3 });
+      y += 17;
+      for (const n of notes) {
+        doc.font(N).fontSize(9.5);
+        const h = doc.heightOfString(n, { width: W - 60 });
+        need(h);
+        doc.font(N).fontSize(9.5).fillColor(GREY).text(n, L, y, { width: W - 60 });
+        y += h + 5;
+      }
+    }
+    footer();
     doc.end();
   });
 }
