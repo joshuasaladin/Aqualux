@@ -558,7 +558,7 @@ main.wide { max-width: 1750px; }
 .steps a { color: var(--aqua-dark); }
 .gmail-connected { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .gmail-connected .who { font-weight: 650; color: var(--navy); }
-.sync-err { color: var(--red); font-size: .85rem; margin-top: 8px; }
+.sync-err { color: var(--red); font-size: .85rem; margin-top: 8px; overflow-wrap: anywhere; }
 .settings-divider { border: none; border-top: 1px solid var(--border); margin: 18px 0; }
 .gcal-badge {
   display: inline-block; margin: 10px 0; font-size: .82rem; color: var(--amber);

@@ -512,10 +512,17 @@ export function pauseSyncFor(ms) {
  * promo, calendar RSVP, or a real inquiry) and file it accordingly.
  */
 function handleNewThread(threadId, thread, myEmail, counts) {
-  const first = thread.messages?.[0];
+  // A conversation we started from Gmail itself (to a guest) counts from the
+  // first email someone else sends in it. Until anyone answers there is
+  // nothing to file, and the thread is looked at again when a reply comes in.
+  const first = (thread.messages || []).find((m) => {
+    const f = parseFrom(header(m, 'From'));
+    return f.email && f.email !== myEmail;
+  });
   if (!first) return;
   const from = parseFrom(header(first, 'From'));
-  if (!from.email || from.email === myEmail) { markThreadProcessed(threadId); return; }
+  // our service providers answering a booking request are not guests
+  if (providerEmails().has(from.email)) { markThreadProcessed(threadId); return; }
 
   const bodyText = extractText(first.payload) || first.snippet || '';
   const subject = header(first, 'Subject') || '(no subject)';
@@ -567,6 +574,37 @@ function handleNewThread(threadId, thread, myEmail, counts) {
   registerThread(threadId, info.lastInsertRowid);
   absorbThreadMessages(info.lastInsertRowid, thread, myEmail);
   counts.created++;
+}
+
+/** Email addresses written in the providers' contact details on the Services pages. */
+function providerEmails() {
+  const set = new Set();
+  for (const { contact } of db.prepare(`SELECT contact FROM services WHERE contact != ''`).all()) {
+    for (const e of String(contact).match(/[^\s<>,;:"'|()]+@[^\s<>,;:"'|()]+\.[a-z]{2,}/gi) || []) set.add(e.toLowerCase());
+  }
+  return set;
+}
+
+/**
+ * One-time repair: conversations we started from Gmail used to be skipped for
+ * good, even after the guest answered. Look at the ones from the last two
+ * months again so their emails come into the CRM.
+ */
+async function recheckOwnThreads(myEmail, counts) {
+  const DONE = 'gmail_recheck_own_threads_v1';
+  if (getSetting(DONE)) return;
+  let pageToken = '', pages = 0;
+  do {
+    const r = await apiGet(`/threads?q=${encodeURIComponent('in:sent newer_than:60d')}&maxResults=100${pageToken ? `&pageToken=${pageToken}` : ''}`);
+    for (const t of r.threads || []) {
+      if (db.prepare(`SELECT 1 FROM lead_threads WHERE thread_id = ?`).get(t.id)) continue;
+      if (!db.prepare(`DELETE FROM processed_threads WHERE thread_id = ?`).run(t.id).changes) continue;
+      await syncThread(t.id, myEmail, counts);
+      await sleep(150);
+    }
+    pageToken = r.nextPageToken || '';
+  } while (pageToken && ++pages < 5);
+  setSetting(DONE, new Date().toISOString());
 }
 
 /** Bring one Gmail thread up to date: new replies on a lead, or a brand-new inquiry. */
@@ -666,6 +704,7 @@ export async function syncNow() {
       await fullScan(myEmail, counts);
       setSetting('gmail_history_id', historyId);
     }
+    await recheckOwnThreads(myEmail, counts);
     const { created, updated, payments } = counts;
 
     setSetting('gmail_last_sync', new Date().toISOString());
